@@ -1,0 +1,12 @@
+*backup*
+misc/
+runs/
+video/
+__pycache__/
+.ipynb_checkpoints/
+configurations/
+
+requ.txt
+test.py
+evolution.sublime-project
+evolution.sublime-workspace
