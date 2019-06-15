@@ -44,7 +44,7 @@ class SharedNoiseTable(object):
 
 # for virtual batch normalization, we need to sample a batch of (random) observations over which we calculate the parameters
 # for batch normalization, which will then be held fixed when appling batchnorm to the actual policy evaluation/agent run.
-def get_ref_batch(env, batch_size=256, p=0.05):
+def get_ref_batch(env, batch_size=128, p=0.05):
     """
     Performs random actions in <env> and adds the subsequent observations with
     a probability of <p> to the reference batch, which is going to be output
@@ -86,7 +86,7 @@ class VirtualBatchNorm(nn.Module):
         self.ref_mean = None
         self.ref_var = None
 
-        self.initialise = True
+        self.update = True
 
     def get_stats(self, x):
         mean = x.mean(0, keepdim=True)
@@ -94,7 +94,7 @@ class VirtualBatchNorm(nn.Module):
         return mean, var
 
     def forward(self, x):
-        if self.initialise:
+        if self.update:
             mean, var = self.get_stats(x)
             if self.ref_mean is not None or self.ref_var is not None:
                 batch_size = x.shape[0]
@@ -119,6 +119,7 @@ class Policy(nn.Module):
         super(Policy, self).__init__()
 
         self.env = env
+        self._ref_batch = None
         input_shape = self.env.observation_space.shape
         output_shape = self.env.action_space.n
         self.conv = nn.Sequential(nn.Conv2d(in_channels=input_shape[-1], out_channels=16,
@@ -143,7 +144,7 @@ class Policy(nn.Module):
                                  nn.ReLU(),
                                  nn.Linear(in_features=256, out_features=output_shape))
 
-        self.initialise_policy()
+        self.apply(self.initialise_parameters)
 
     def forward(self, obs):
         # expect an input of form: N x C x H x W
@@ -153,16 +154,32 @@ class Policy(nn.Module):
         x = self.mlp(x)
         return torch.argmax(x, dim=1)  # action not chosen stochastically
 
-    def initialise_policy(self):
-        self.apply(self.initialise_parameters)
-        self.train()
+    def rollout(self):
+        """
+        Eventuell rollout in eine andere Klasse packen. Ist Rollout wirklich ein teil des torch.module Policy? Evtl in ES
 
+        sich überlegen, einen self.ref_batch zu haben, der am anfang leer ist, bei jedem rollout wird dann zu erst der aktuelle
+        ref_batch durchgegeben, um VBN zu aktualisieren, bevor VBN dann gefreezt wird und der eigentliche rollout beginnt.
+        Beim ersten rollout muss der ref_batch erst noch gesampled werden, wie es aktuell in initialise_policy passiert. Nachdem
+        VBN mit dem aktuellen ref_batch aktualisiert wurde, wird er wieder geleert.
+        Während des rollouts, wird dann mit p=0.001 wahrscheinlichkeit jede observation in self.ref_batch gesammelt, sodass bei
+        einem nächsten rollout VBN mit diesem ref_batch aktualisiert werden kann.
+        """
         # initialise virtual batch normalization
-        ref_batch = get_ref_batch(self.env)
-        self.forward(ref_batch)
+        self.freeze_VBN(False)
+        if self._ref_batch is None:
+            self._ref_batch = get_ref_batch(self.env)
+        self.forward(self._ref_batch)
+        self.freeze_VBN(True)
+
+        # do rollout
+
+        return 0
+
+    def freeze_VBN(self, freeze):
         for m in self.modules():
             if isinstance(m, VirtualBatchNorm):
-                m.initialise = False
+                m.update = not freeze
 
     def initialise_parameters(self, m):
         """
