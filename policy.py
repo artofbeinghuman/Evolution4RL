@@ -65,11 +65,13 @@ class VirtualBatchNorm(nn.Module):
         self.eps = 1e-5  # epsilon
         self.ref_mean = None
         self.ref_var = None
-        self.gamma = nn.parameter.Parameter(torch.ones([1] + input_shape + [1]))
-        self.beta = nn.parameter.Parameter(torch.zeros([1] + input_shape + [1]))
+        self.gamma = nn.parameter.Parameter(torch.ones([1] + input_shape))
+        self.beta = nn.parameter.Parameter(torch.zeros([1] + input_shape))
 
         self.update = True
         self.batch_size = 1
+
+        self.repr = '{}(input_shape={})'.format(self.__class__.__name__, input_shape)
 
     def get_stats(self, x):
         mean = x.mean(0, keepdim=True)
@@ -93,7 +95,7 @@ class VirtualBatchNorm(nn.Module):
         return (x - self.ref_mean) / torch.sqrt(self.ref_var + self.eps) * self.gamma + self.beta
 
     def __repr__(self):
-        return ('{}()'.format(self.__class__.__name__))
+        return (self.repr)
 
 
 class Policy(nn.Module):
@@ -112,17 +114,17 @@ class Policy(nn.Module):
         conv2_out = conv_output(conv1_out, 4, 2)
         self.conv = nn.Sequential(nn.Conv2d(in_channels=input_shape[-1], out_channels=16,
                                             kernel_size=8, stride=4),
-                                  VirtualBatchNorm(input_shape=[conv1_out, conv1_out]),
+                                  VirtualBatchNorm(input_shape=[16, conv1_out, conv1_out]),
                                   nn.ReLU(),
                                   nn.Conv2d(in_channels=16, out_channels=32,
                                             kernel_size=4, stride=2),
-                                  VirtualBatchNorm(input_shape=[conv2_out, conv2_out]),
+                                  VirtualBatchNorm(input_shape=[32, conv2_out, conv2_out]),
                                   nn.ReLU())
 
         self.lin_dim = (conv2_out)**2 * 32
 
         self.mlp = nn.Sequential(nn.Linear(in_features=self.lin_dim, out_features=256),
-                                 VirtualBatchNorm(input_shape=[self.lin_dim]),
+                                 VirtualBatchNorm(input_shape=[256]),
                                  nn.ReLU(),
                                  nn.Linear(in_features=256, out_features=output_shape))
 
@@ -136,7 +138,7 @@ class Policy(nn.Module):
         x = self.mlp(x)
         return torch.argmax(x, dim=1)  # action not chosen stochastically
 
-    def rollout(self, theta, env, timestep_limit, max_runs=5, novelty=False):
+    def rollout(self, theta, env, timestep_limit, max_runs=5, novelty=False, rank=None):
         """
         rollout of the policy in the given env for no more than max_runs and no more than timestep_limit steps
         """
@@ -152,7 +154,7 @@ class Policy(nn.Module):
             if t == 0:
                 e = 0  # only start with 0 here to avoid issue in condition check for first loop
             e += 1
-
+            print("{}, run {}, timestep {}".format(rank, e, t))
             # initialise or update virtual batch normalization
             self.freeze_VBN(False)
             if self._ref_batch is None:
@@ -160,8 +162,8 @@ class Policy(nn.Module):
             else:  # suppose you have a list from the last run
                 # I figured it is faster to choose out of all obs of the last run,
                 # instead of flipping a coin after every observation
-                self._ref_batch = self._ref_batch[self.rng.choice(len(self._ref_batch), 64)]
-                self._ref_batch = torch.tensor(np.asarray(self._ref_batch).transpose(0, 3, 1, 2))
+                self._ref_batch = np.array(self._ref_batch)[self.rng.choice(int(len(self._ref_batch)), 64)]
+                self._ref_batch = torch.tensor(self._ref_batch.transpose(0, 3, 1, 2))
             self.forward(self._ref_batch)
             self.freeze_VBN(True)
             self._ref_batch = []
@@ -181,6 +183,7 @@ class Policy(nn.Module):
                     break
 
         mean_reward = rewards / e
+        # return mean_reward, novelty_vector
         return mean_reward
 
     def freeze_VBN(self, freeze):
@@ -235,6 +238,6 @@ class Policy(nn.Module):
 
 def get_env():
     import gym
-    from atari_wrappers import wrap_env
+    from gym_wrappers import wrap_env
     env = gym.make("FrostbiteNoFrameskip-v4")
     return wrap_env(env)

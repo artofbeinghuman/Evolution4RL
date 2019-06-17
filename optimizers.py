@@ -2,11 +2,11 @@ import numpy as np
 
 
 class Optimizer(object):
-    def __init__(self, theta, l2coeff=0):
+    def __init__(self, theta, l2coeff=0.005):
         self.theta = theta
         self.dim = len(self.theta)
         self.t = 0
-        self.l2coeff
+        self.l2coeff = l2coeff
 
     def update(self, globalg):
         self.t += 1
@@ -20,19 +20,20 @@ class Optimizer(object):
 
 
 class SGD(Optimizer):
-    def __init__(self, theta, stepsize, momentum=0.9):
+    def __init__(self, theta, stepsize, l2coeff=0.005, momentum=0.9):
         Optimizer.__init__(self, theta)
         self.v = np.zeros(self.dim, dtype=np.float32)
         self.stepsize, self.momentum = stepsize, momentum
 
-    def _compute_step(self, globalg):
+    def _compute_step(self, g):
+        globalg = g + self.l2coeff * self.theta
         self.v = self.momentum * self.v + (1. - self.momentum) * globalg
         step = -self.stepsize * self.v
         return step
 
 
 class Adam(Optimizer):
-    def __init__(self, theta, stepsize, beta1=0.9, beta2=0.999, epsilon=1e-08):
+    def __init__(self, theta, stepsize, l2coeff=0.005, beta1=0.9, beta2=0.999, epsilon=1e-08):
         Optimizer.__init__(self, theta)
         self.stepsize = stepsize
         self.beta1 = beta1

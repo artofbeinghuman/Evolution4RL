@@ -2,7 +2,7 @@ import numpy as np
 from functools import partial
 import pickle
 import torch
-from anfang import Policy
+from policy import Policy
 from optimizers import SGD, Adam
 
 # Credit goes to Nathaniel Rodriguez from whom I adopted large parts of this code
@@ -286,12 +286,12 @@ def slice_size(slice_objects):
     return num_elements
 
 
-def get_env_from(config):
+def get_env_from(exp):
     import gym
-    env = gym.make(config['env_id'])
-    if config['policy']['type'] == "ESAtariPolicy":
-        from .atari_wrappers import wrap_deepmind
-        env = wrap_deepmind(env)
+    env = gym.make(exp['env_id'])
+    if exp['policy']['type'] == "ESAtariPolicy":
+        from gym_wrappers import wrap_env
+        env = wrap_env(env)
     return env
 
 
@@ -331,12 +331,21 @@ class ES:
 
     """
 
-    def __init__(self, config, step_size, **kwargs):
+    def __init__(self, exp, **kwargs):
         """
         :param xo: initial centroid
-        :param step_size: float. the size of mutations
-        :param num_mutations: number of dims to mutate in each iter (defaults to #dim)
-        :param verbose: True/False. print info on run
+        kwargs:
+        :param step_size (optional): step size to use for mutation (fixed and uniform variance of mutation)
+        :param num_mutations (optional): number of dims to mutate in each iter (defaults to #dim)
+        :param seed (optional): global seed for all workers
+        :param rand_num_table_size (optional): size of the random number table
+        :param time_step_limit: maximum number of timesteps for each policy evaluation (one or more rollouts)
+        :param max_runs_per_eval: maximum number of rollouts per policy evaluation
+        :param use_novelty (optional): whether to employ novelty weighted updating
+        :param OpenAIES (optional): whether to run the ES in the OpenAI style or traditionally (put optimizer in exp json!)
+        :param num_parents (optional): for truncated selection, default for OpenAIES = all (=number of workers), for !OpenAIES = 0.5*number of workers
+        :param verbose (optional): True/False. print info on run
+
         """
 
         # Initiate MPI
@@ -347,6 +356,8 @@ class ES:
         self._size = self._comm.Get_size()
         assert self._size % 2 == 0
 
+        print("This is worker", self._rank)
+
         self._global_seed = kwargs.get('seed', 123)
         torch.manual_seed(self._global_seed)
         self._global_rng = np.random.RandomState(self._global_seed)
@@ -356,25 +367,25 @@ class ES:
         # the even ranked workers will perturb positively, the odd ones negatively
         self._seed_set = [s for ss in [[s, s] for s in self._seed_set] for s in ss]
         self._worker_rngs = [np.random.RandomState(seed) for seed in self._seed_set]
-        self._par_choices = np.arange(0, self._num_parameters, dtype=np.int32)
+        #self._par_choices = np.arange(0, self._num_parameters, dtype=np.int32)
         self._generation_number = 0
         self._score_history = []
 
         # create policy of this worker
         # (parameters should be initialised randomly via global rng, such that all workers start with identical centroid)
-        self.config = config
-        self.env = get_env_from(config)
+        self.exp = exp
+        self.env = get_env_from(exp)
         self.policy = Policy(self.env.observation_space.shape, self.env.action_space.n, self._worker_rngs[self._rank])
         self._theta = self.policy.get_flat()
-        self.optimizer = {'sgd': SGD, 'adam': Adam}[config['optimizer']['type']](self._theta, **config['optimizer']['args'])
+        self.optimizer = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](self._theta, **exp['optimizer']['args'])
 
         # User input parameters
         self.objective = self.policy.rollout
-        time_step_limit = kwargs.get('time_step_limit', 10000)
-        max_runs = kwargs.get('max_runs_per_episode', 5)
+        timestep_limit = kwargs.get('timestep_limit', 10000)
+        max_runs = kwargs.get('max_runs_per_eval', 5)
         novelty = kwargs.get('use_novelty', False)
-        self.obj_kwargs = {'env': self.env, 'time_step_limit': time_step_limit, 'max_runs': max_runs, 'novelty': novelty}
-        self._step_size = np.float32(step_size)
+        self.obj_kwargs = {'env': self.env, 'timestep_limit': timestep_limit, 'max_runs': max_runs, 'novelty': novelty, 'rank': self._rank}
+        self._step_size = np.float32(kwargs.get('step_size', 1.0))  # this is the noise_stdev parameter from Uber json-configs
         self._num_parameters = len(self._theta)
         self._num_mutations = kwargs.get('num_mutations', self._num_parameters)  # limited perturbartion ES as in Zhang et al 2017, ch.4.1
         self._verbose = kwargs.get('verbose', False)
@@ -383,12 +394,13 @@ class ES:
 
         if self._OpenAIES:
             # use centered ranks [0.5, -0.5]
-            self._num_parents = self._size
-            self._weights = np.arange(self._num_parents, 0, -1)
-            self._weights /= self._num_parents
+            self._num_parents = kwargs.get('num_parents', self._size)
+            self._weights = np.arange(self._num_parents, 0, -1, dtype=np.float32)
+            self._weights /= np.array([self._num_parents])
             self._weights -= 0.5
             # multiply 1/(sigma*N) factor directly at this point
-            self._weights /= (self._num_parents * self._step_size)
+            self._weights /= np.array([self._num_parents * self._step_size])
+            self._weights.astype(np.float32, copy=False)
         else:
             # Classics ES:
             self._num_parents = kwargs.get('num_parents', int(self._size / 2))  # truncated selection
@@ -411,15 +423,18 @@ class ES:
         assert itemsize == MPI.FLOAT.Get_size()
         self._rand_num_table = np.ndarray(buffer=buf, dtype='f', shape=(self._rand_num_table_size,))
         if self._rank == 0:
+            print("{}: Calculating Random Table".format(self._rank))
             self._rand_num_table[:] = self._global_rng.randn(self._rand_num_table_size)
-            # Fold step-size into table values
-            self._rand_num_table *= self._step_size
+            if not self._OpenAIES:
+                # Fold step-size into table values
+                self._rand_num_table *= self._step_size
 
         self._max_table_step = kwargs.get("max_table_step", 5)
         self._max_param_step = kwargs.get("max_param_step", 1)
 
         self._update_ratios = []
 
+        print("{}: I am at the barrier!".format(self._rank))
         self._comm.Barrier()
 
     def __getstate__(self):
@@ -452,7 +467,7 @@ class ES:
             setattr(self, key, state[key])
 
         # Reconstruct larger structures and load MPI
-        self._par_choices = np.arange(0, self._num_parameters, dtype=np.int32)
+        #self._par_choices = np.arange(0, self._num_parameters, dtype=np.int32)
         self._old_theta = self._theta.copy()
         from mpi4py import MPI
         self._MPI = MPI
@@ -465,23 +480,13 @@ class ES:
         self._rand_num_table = self._global_rng.randn(self._rand_num_table_size)
         self._rand_num_table *= self._step_size
 
-    def __call__(self, num_generations, objective=None, kwargs=None):
+    def __call__(self, num_generations):
         """
         :param num_generations: how many generations it will run for
-        :param objective: a full or partial version of function
-        :param kwargs: key word arguments for additional objective parameters
         :return: None
         """
-        if objective is not None:
-            if kwargs is None:
-                kwargs = {}
-        elif (self.objective is None) and (objective is None):
-            raise AttributeError("Error: No objective defined")
-        else:
-            objective = self.objective
-            kwargs = self.obj_kwargs
 
-        partial_objective = partial(objective, **kwargs)
+        partial_objective = partial(self.objective, **self.obj_kwargs)
         for i in range(num_generations):
             if self._verbose and (self._rank == 0):
                 print("Generation:", self._generation_number)
@@ -525,13 +530,14 @@ class ES:
                         dimension_slices, perturbation_slices, self._rank % 2 == 0)
 
         # Run objective
-        local_cost = np.empty(1, dtype=np.float32)
-        local_cost[0] = objective(self._theta)
+        local_rew = np.empty(1, dtype=np.float32)
+        local_rew[0] = objective(self._theta)
+        print("{}, gen {}, reward {}".format(self._rank, self._generation_number, local_rew[0]))
 
         # Consolidate return values
         all_rewards = np.empty(self._size, dtype=np.float32)
         # Allgather is a blocking call, elements are gathered in order of rank
-        self._comm.Allgather([local_cost, self._MPI.FLOAT],
+        self._comm.Allgather([local_rew, self._MPI.FLOAT],
                              [all_rewards, self._MPI.FLOAT])
         self._update_log(all_rewards)
 
@@ -558,26 +564,26 @@ class ES:
                 if (parent_num == 0) and (all_rewards[rank] <= self._running_best_cost):
                     self._update_best_flag = True
                     self._running_best_cost = all_rewards[rank]
-                    # Since the best is always first, copy centroid elements
+                    # Since the best is always first, copy centroid (theta) elements
                     self._running_best[:] = self._old_theta  # unperturbed theta
 
                 if rank == self._rank:
-                    # Update best for self ranks
-                    if (parent_num == 0) and self._update_best_flag:
-                        multi_slice_add(self._running_best, self._rand_num_table,
-                                        local_dim_slices, local_perturbation_slices, rank % 2 == 0)
+                    # Update running best for self ranks
+                    # if (parent_num == 0) and self._update_best_flag:
+                    #     multi_slice_add(self._running_best, self._rand_num_table,
+                    #                     local_dim_slices, local_perturbation_slices, rank % 2 == 0)
 
                     dimension_slices = local_dim_slices
                     perturbation_slices = local_perturbation_slices
 
                 else:
-                    # Apply update best for non-self ranks
-                    if (parent_num == 0) and self._update_best_flag:
-                        multi_slice_add(self._running_best, self._rand_num_table,
-                                        dimension_slices, perturbation_slices, rank % 2 == 0)
-
                     perturbation_slices = self._draw_random_table_slices(self._worker_rngs[rank])
                     dimension_slices, perturbation_slices = match_slices(master_dim_slices, perturbation_slices)
+
+                # Apply update running best for non-self ranks
+                if (parent_num == 0) and self._update_best_flag:
+                    multi_slice_add(self._running_best, self._rand_num_table,
+                                    dimension_slices, perturbation_slices, rank % 2 == 0)
 
                 # first divide the gradient with weight w, then add perturbation and multiply with w
                 # again, such that only this perturbation is weighted in the end, supposedly faster
