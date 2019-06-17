@@ -2,19 +2,18 @@ import numpy as np
 
 
 class Optimizer(object):
-    def __init__(self, theta):
+    def __init__(self, theta, l2coeff=0):
         self.theta = theta
         self.dim = len(self.theta)
         self.t = 0
+        self.l2coeff
 
     def update(self, globalg):
         self.t += 1
         step = self._compute_step(globalg)
-        theta = self.theta
-        ratio = np.linalg.norm(step) / np.linalg.norm(theta)
-        new_theta = self.theta + step
-        self.theta = new_theta
-        return ratio, new_theta
+        ratio = np.linalg.norm(step) / np.linalg.norm(self.theta)
+        self.theta += step
+        return ratio, self.theta
 
     def _compute_step(self, globalg):
         raise NotImplementedError
@@ -42,10 +41,10 @@ class Adam(Optimizer):
         self.m = np.zeros(self.dim, dtype=np.float32)
         self.v = np.zeros(self.dim, dtype=np.float32)
 
-    def _compute_step(self, globalg):
+    def _compute_step(self, g):
+        globalg = g + self.l2coeff * self.theta
         a = self.stepsize * np.sqrt(1 - self.beta2 ** self.t) / (1 - self.beta1 ** self.t)
         self.m = self.beta1 * self.m + (1 - self.beta1) * globalg
         self.v = self.beta2 * self.v + (1 - self.beta2) * (globalg * globalg)
         step = -a * self.m / (np.sqrt(self.v) + self.epsilon)
         return step
-

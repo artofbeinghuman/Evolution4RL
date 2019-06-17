@@ -22,26 +22,6 @@ writer = SummaryWriter("runs/ESAtari-", comment=date)
 log = SimpleLogger(writer)
 
 
-class SharedNoiseTable(object):
-    def __init__(self, seed):
-        import ctypes
-        import multiprocessing
-        # seed = 123
-        count = 250000000  # 1 gigabyte of 32-bit numbers. Will actually sample 2 gigabytes below.
-        log('Sampling {} random numbers with seed {}'.format(count, seed))
-        self._shared_mem = multiprocessing.Array(ctypes.c_float, count)
-        self.noise = np.ctypeslib.as_array(self._shared_mem.get_obj())
-        assert self.noise.dtype == np.float32
-        self.noise[:] = np.random.RandomState(seed).randn(count)  # 64-bit to 32-bit conversion here
-        log('Sampled {} bytes'.format(self.noise.size * 4))
-
-    def get(self, i, dim):
-        return self.noise[i:i + dim]
-
-    def sample_index(self, stream, dim):
-        return stream.randint(0, len(self.noise) - dim + 1)
-
-
 # for virtual batch normalization, we need to sample a batch of (random) observations over which we calculate the parameters
 # for batch normalization, which will then be held fixed when appling batchnorm to the actual policy evaluation/agent run.
 def get_ref_batch(env, batch_size=128, p=0.05):
@@ -52,11 +32,12 @@ def get_ref_batch(env, batch_size=128, p=0.05):
     """
     ref_batch = []
     ob = env.reset()
+    rng = np.random.RandomState(0)
     while len(ref_batch) < batch_size:
         ob, _, done, _ = env.step(env.action_space.sample())
         if done:
             ob = env.reset()
-        elif np.random.RandomState(0).rand() < p:
+        elif rng.rand() < p:
             ref_batch.append(ob)
     return torch.tensor(np.asarray(ref_batch).transpose(0, 3, 1, 2))
 
@@ -75,18 +56,20 @@ def run(exp_file):
 class VirtualBatchNorm(nn.Module):
     """
     Module for Virtual Batch Normalization over batch dimension, Input: batch_size x [feature_dims],
-    without affine transformation (no learnt gamma, beta parameters in this rl setting)
-    adapted from https://github.com/deNsuh/segan-pytorch/blob/master/vbnorm.py
+    with affine transformation (gamma, beta learned via ES)
     """
 
-    def __init__(self):
+    def __init__(self, input_shape):
         super(VirtualBatchNorm, self).__init__()
         # batch statistics
         self.eps = 1e-5  # epsilon
         self.ref_mean = None
         self.ref_var = None
+        self.gamma = nn.parameter.Parameter(torch.ones([1] + input_shape + [1]))
+        self.beta = nn.parameter.Parameter(torch.zeros([1] + input_shape + [1]))
 
         self.update = True
+        self.batch_size = 1
 
     def get_stats(self, x):
         mean = x.mean(0, keepdim=True)
@@ -96,51 +79,50 @@ class VirtualBatchNorm(nn.Module):
     def forward(self, x):
         if self.update:
             mean, var = self.get_stats(x)
-            if self.ref_mean is not None or self.ref_var is not None:
-                batch_size = x.shape[0]
-                coeff = 1. / (batch_size + 1.)
+            if self.ref_mean is not None and self.ref_var is not None:
+                coeff = x.shape[0] / (self.batch_size + x.shape[0])
                 self.ref_mean = coeff * mean + (1 - coeff) * self.ref_mean
                 self.ref_var = coeff * var + (1 - coeff) * self.ref_var
             else:
                 self.ref_mean, self.ref_var = mean, var
-            return self._normalize(x, self.ref_mean, self.ref_var)
+            return self._normalize(x)
         else:
-            return self._normalize(x, self.ref_mean, self.ref_var)
+            return self._normalize(x)
 
-    def _normalize(self, x, mean, var):
-        return x - mean / torch.sqrt(var + self.eps)
+    def _normalize(self, x):
+        return (x - self.ref_mean) / torch.sqrt(self.ref_var + self.eps) * self.gamma + self.beta
 
     def __repr__(self):
         return ('{}()'.format(self.__class__.__name__))
 
 
 class Policy(nn.Module):
-    def __init__(self, env):
+    def __init__(self, input_shape, output_shape, rng=np.random.RandomState(0)):
         super(Policy, self).__init__()
 
-        self.env = env
+        #self.env = env
+        self.rng = rng
         self._ref_batch = None
-        input_shape = self.env.observation_space.shape
-        output_shape = self.env.action_space.n
-        self.conv = nn.Sequential(nn.Conv2d(in_channels=input_shape[-1], out_channels=16,
-                                            kernel_size=8, stride=4),
-                                  #nn.BatchNorm2d(num_features=16, track_running_stats=False),
-                                  VirtualBatchNorm(),
-                                  nn.ReLU(),
-                                  nn.Conv2d(in_channels=16, out_channels=32,
-                                            kernel_size=4, stride=2),
-                                  #nn.BatchNorm2d(num_features=32, track_running_stats=False),
-                                  VirtualBatchNorm(),
-                                  nn.ReLU())
+        #input_shape = self.env.observation_space.shape
+        #output_shape = self.env.action_space.n
 
         def conv_output(width, kernel, stride, padding=0):
             return int((width - kernel + 2 * padding) // stride + 1)
+        conv1_out = conv_output(input_shape[-2], 8, 4)
+        conv2_out = conv_output(conv1_out, 4, 2)
+        self.conv = nn.Sequential(nn.Conv2d(in_channels=input_shape[-1], out_channels=16,
+                                            kernel_size=8, stride=4),
+                                  VirtualBatchNorm(input_shape=[conv1_out, conv1_out]),
+                                  nn.ReLU(),
+                                  nn.Conv2d(in_channels=16, out_channels=32,
+                                            kernel_size=4, stride=2),
+                                  VirtualBatchNorm(input_shape=[conv2_out, conv2_out]),
+                                  nn.ReLU())
 
-        self.lin_dim = (conv_output(conv_output(input_shape[-2], 8, 4), 4, 2))**2 * 32
+        self.lin_dim = (conv2_out)**2 * 32
 
         self.mlp = nn.Sequential(nn.Linear(in_features=self.lin_dim, out_features=256),
-                                 # nn.BatchNorm1d(num_features=256),
-                                 VirtualBatchNorm(),
+                                 VirtualBatchNorm(input_shape=[self.lin_dim]),
                                  nn.ReLU(),
                                  nn.Linear(in_features=256, out_features=output_shape))
 
@@ -154,27 +136,52 @@ class Policy(nn.Module):
         x = self.mlp(x)
         return torch.argmax(x, dim=1)  # action not chosen stochastically
 
-    def rollout(self):
+    def rollout(self, theta, env, timestep_limit, max_runs=5, novelty=False):
         """
-        Eventuell rollout in eine andere Klasse packen. Ist Rollout wirklich ein teil des torch.module Policy? Evtl in ES
-
-        sich überlegen, einen self.ref_batch zu haben, der am anfang leer ist, bei jedem rollout wird dann zu erst der aktuelle
-        ref_batch durchgegeben, um VBN zu aktualisieren, bevor VBN dann gefreezt wird und der eigentliche rollout beginnt.
-        Beim ersten rollout muss der ref_batch erst noch gesampled werden, wie es aktuell in initialise_policy passiert. Nachdem
-        VBN mit dem aktuellen ref_batch aktualisiert wurde, wird er wieder geleert.
-        Während des rollouts, wird dann mit p=0.001 wahrscheinlichkeit jede observation in self.ref_batch gesammelt, sodass bei
-        einem nächsten rollout VBN mit diesem ref_batch aktualisiert werden kann.
+        rollout of the policy in the given env for no more than max_runs and no more than timestep_limit steps
         """
-        # initialise virtual batch normalization
-        self.freeze_VBN(False)
-        if self._ref_batch is None:
-            self._ref_batch = get_ref_batch(self.env)
-        self.forward(self._ref_batch)
-        self.freeze_VBN(True)
+        # update policy
+        self.set_from_flat(theta)
 
-        # do rollout
+        t, e = 0, 1
+        rewards, novelty_vector = 0, []
 
-        return 0
+        # do rollouts until max_runs rollouts where done or
+        # until time left is less than 70% of mean rollout length
+        while e <= max_runs and (timestep_limit - t) >= 0.7 * t / e:
+            if t == 0:
+                e = 0  # only start with 0 here to avoid issue in condition check for first loop
+            e += 1
+
+            # initialise or update virtual batch normalization
+            self.freeze_VBN(False)
+            if self._ref_batch is None:
+                self._ref_batch = get_ref_batch(env)
+            else:  # suppose you have a list from the last run
+                # I figured it is faster to choose out of all obs of the last run,
+                # instead of flipping a coin after every observation
+                self._ref_batch = self._ref_batch[self.rng.choice(len(self._ref_batch), 64)]
+                self._ref_batch = torch.tensor(np.asarray(self._ref_batch).transpose(0, 3, 1, 2))
+            self.forward(self._ref_batch)
+            self.freeze_VBN(True)
+            self._ref_batch = []
+
+            # do rollout
+            obs = env.reset()
+            for _ in range(timestep_limit - t):
+                action = self.forward(to_obs_tensor(obs))
+                obs, rew, done, _ = env.step(action)
+                rewards += rew
+                self._ref_batch.append(obs)
+                if novelty:
+                    novelty_vector.append(env.unwrapped._get_ram())
+
+                t += 1
+                if done:
+                    break
+
+        mean_reward = rewards / e
+        return mean_reward
 
     def freeze_VBN(self, freeze):
         for m in self.modules():
@@ -190,9 +197,6 @@ class Policy(nn.Module):
             nn.init.constant_(m.bias.data, 0)
         elif isinstance(m, nn.Conv2d):
             nn.init.xavier_normal_(m.weight.data)
-            nn.init.constant_(m.bias.data, 0)
-        elif isinstance(m, nn.modules.batchnorm._BatchNorm):
-            nn.init.uniform_(m.weight.data)
             nn.init.constant_(m.bias.data, 0)
 
     def get_flat(self):

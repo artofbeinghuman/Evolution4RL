@@ -5,6 +5,9 @@ import torch
 from anfang import Policy
 from optimizers import SGD, Adam
 
+# Credit goes to Nathaniel Rodriguez from whom I adopted large parts of this code
+# https://github.com/Nathaniel-Rodriguez/evostrat/blob/master/evostrat/evostrat.py
+
 
 def multi_slice_add(x1_inplace, x2, x1_slices=(), x2_slices=(), add=True):
     """
@@ -328,7 +331,7 @@ class ES:
 
     """
 
-    def __init__(self, config, xo, step_size, **kwargs):
+    def __init__(self, config, step_size, **kwargs):
         """
         :param xo: initial centroid
         :param step_size: float. the size of mutations
@@ -346,20 +349,33 @@ class ES:
 
         self._global_seed = kwargs.get('seed', 123)
         torch.manual_seed(self._global_seed)
+        self._global_rng = np.random.RandomState(self._global_seed)
+        self._seed_set = self._global_rng.choice(1000000, size=self._size // 2,
+                                                 replace=False)
+        # for mirrored sampling, two subsequent workers (according to rank) will have the same seed/rng
+        # the even ranked workers will perturb positively, the odd ones negatively
+        self._seed_set = [s for ss in [[s, s] for s in self._seed_set] for s in ss]
+        self._worker_rngs = [np.random.RandomState(seed) for seed in self._seed_set]
+        self._par_choices = np.arange(0, self._num_parameters, dtype=np.int32)
+        self._generation_number = 0
+        self._score_history = []
 
         # create policy of this worker
         # (parameters should be initialised randomly via global rng, such that all workers start with identical centroid)
         self.config = config
         self.env = get_env_from(config)
-        self.policy = Policy(self.env)
+        self.policy = Policy(self.env.observation_space.shape, self.env.action_space.n, self._worker_rngs[self._rank])
         self._theta = self.policy.get_flat()
         self.optimizer = {'sgd': SGD, 'adam': Adam}[config['optimizer']['type']](self._theta, **config['optimizer']['args'])
 
         # User input parameters
-        self.objective = kwargs.get('objective', None)
-        self.obj_kwargs = kwargs.get('obj_kwargs', {})
+        self.objective = self.policy.rollout
+        time_step_limit = kwargs.get('time_step_limit', 10000)
+        max_runs = kwargs.get('max_runs_per_episode', 5)
+        novelty = kwargs.get('use_novelty', False)
+        self.obj_kwargs = {'env': self.env, 'time_step_limit': time_step_limit, 'max_runs': max_runs, 'novelty': novelty}
         self._step_size = np.float32(step_size)
-        self._num_parameters = len(xo)
+        self._num_parameters = len(self._theta)
         self._num_mutations = kwargs.get('num_mutations', self._num_parameters)  # limited perturbartion ES as in Zhang et al 2017, ch.4.1
         self._verbose = kwargs.get('verbose', False)
 
@@ -371,6 +387,8 @@ class ES:
             self._weights = np.arange(self._num_parents, 0, -1)
             self._weights /= self._num_parents
             self._weights -= 0.5
+            # multiply 1/(sigma*N) factor directly at this point
+            self._weights /= (self._num_parents * self._step_size)
         else:
             # Classics ES:
             self._num_parents = kwargs.get('num_parents', int(self._size / 2))  # truncated selection
@@ -378,18 +396,6 @@ class ES:
                 np.arange(1, self._num_parents + 1))
             self._weights /= np.sum(self._weights)
             self._weights.astype(np.float32, copy=False)
-
-        # Internal data
-        self._global_rng = np.random.RandomState(self._global_seed)
-        self._seed_set = self._global_rng.choice(1000000, size=self._size // 2,
-                                                 replace=False)
-        # for mirrored sampling, two subsequent workers (according to rank) will have the same seed/rng
-        # the even ranked workers will perturb positively, the odd ones negatively
-        self._seed_set = [s for ss in [[s, s] for s in self._seed_set] for s in ss]
-        self._worker_rngs = [np.random.RandomState(seed) for seed in self._seed_set]
-        self._par_choices = np.arange(0, self._num_parameters, dtype=np.int32)
-        self._generation_number = 0
-        self._score_history = []
 
         # State
         self._old_theta = self._theta.copy()
@@ -411,6 +417,8 @@ class ES:
 
         self._max_table_step = kwargs.get("max_table_step", 5)
         self._max_param_step = kwargs.get("max_param_step", 1)
+
+        self._update_ratios = []
 
         self._comm.Barrier()
 
@@ -457,9 +465,9 @@ class ES:
         self._rand_num_table = self._global_rng.randn(self._rand_num_table_size)
         self._rand_num_table *= self._step_size
 
-    def __call__(self, num_iterations, objective=None, kwargs=None):
+    def __call__(self, num_generations, objective=None, kwargs=None):
         """
-        :param num_iterations: how many generations it will run for
+        :param num_generations: how many generations it will run for
         :param objective: a full or partial version of function
         :param kwargs: key word arguments for additional objective parameters
         :return: None
@@ -474,7 +482,7 @@ class ES:
             kwargs = self.obj_kwargs
 
         partial_objective = partial(objective, **kwargs)
-        for i in range(num_iterations):
+        for i in range(num_generations):
             if self._verbose and (self._rank == 0):
                 print("Generation:", self._generation_number)
             self._update(partial_objective)
@@ -521,85 +529,76 @@ class ES:
         local_cost[0] = objective(self._theta)
 
         # Consolidate return values
-        all_costs = np.empty(self._size, dtype=np.float32)
+        all_rewards = np.empty(self._size, dtype=np.float32)
         # Allgather is a blocking call, elements are gathered in order of rank
         self._comm.Allgather([local_cost, self._MPI.FLOAT],
-                             [all_costs, self._MPI.FLOAT])
-        self._update_log(all_costs)
+                             [all_rewards, self._MPI.FLOAT])
+        self._update_log(all_rewards)
 
-        self._update_theta(all_costs, unmatched_dimension_slices,
+        self._update_theta(all_rewards, unmatched_dimension_slices,
                            dimension_slices, perturbation_slices)
 
-    def _reconstruct_perturbation(self, rank, master_dim_slices, parent_num):
-        """
-        Constructs the perturbation from other nodes given their rank (from
-        which the seed is determined). Also updates the old_theta with
-        the weighted perturbation
-        :param rank: the rank of the node
-        :param master_dim_slices: the indices that everyone is mutating
-        :param parent_num: the member performance
-        :return: perturbation_slices
-        """
-        perturbation_slices = self._draw_random_table_slices(
-            self._worker_rngs[rank])
-        dimension_slices, perturbation_slices = match_slices(
-            master_dim_slices,
-            perturbation_slices)
-        multi_slice_divide(self._old_theta, self._weights[parent_num],
-                           dimension_slices)
-        multi_slice_add(self._old_theta, self._rand_num_table,
-                        dimension_slices, perturbation_slices, rank % 2 == 0)
-        multi_slice_multiply(self._old_theta, self._weights[parent_num],
-                             dimension_slices)
-
-        return perturbation_slices, dimension_slices
-
-    def _update_theta(self, all_costs, master_dim_slices, local_dim_slices,
+    def _update_theta(self, all_rewards, master_dim_slices, local_dim_slices,
                       local_perturbation_slices):
         """
         *Adds an additional multiply operation to avoid creating a new
         set of arrays for the slices. Not sure which would be faster
         *This is not applied to the running best, because it is not a weighted sum
         """
-        for parent_num, rank in enumerate(np.argsort(all_costs)):
+
+        if self._OpenAIES:
+            g = np.zeros_like(self._theta, dtype=np.float32)
+            # dann alles hierauf summieren, dann als update_ratio, self._theta = optimizer.update(-g)
+        else:
+            g = self._old_theta
+
+        for parent_num, rank in enumerate(np.argsort(all_rewards)):
             if parent_num < self._num_parents:
                 # Begin Update sequence for the running best if applicable
-                if (parent_num == 0) and (all_costs[rank] <= self._running_best_cost):
+                if (parent_num == 0) and (all_rewards[rank] <= self._running_best_cost):
                     self._update_best_flag = True
-                    self._running_best_cost = all_costs[rank]
+                    self._running_best_cost = all_rewards[rank]
                     # Since the best is always first, copy centroid elements
-                    self._running_best[:] = self._old_theta
+                    self._running_best[:] = self._old_theta  # unperturbed theta
 
                 if rank == self._rank:
-
                     # Update best for self ranks
                     if (parent_num == 0) and self._update_best_flag:
                         multi_slice_add(self._running_best, self._rand_num_table,
                                         local_dim_slices, local_perturbation_slices, rank % 2 == 0)
 
-                    multi_slice_divide(self._old_theta, self._weights[parent_num],
-                                       local_dim_slices)
-                    multi_slice_add(self._old_theta, self._rand_num_table,
-                                    local_dim_slices, local_perturbation_slices, rank % 2 == 0)
-                    multi_slice_multiply(self._old_theta, self._weights[parent_num],
-                                         local_dim_slices)
+                    dimension_slices = local_dim_slices
+                    perturbation_slices = local_perturbation_slices
 
                 else:
-                    perturbation_slices, dimension_slices = \
-                        self._reconstruct_perturbation(rank, master_dim_slices,
-                                                       parent_num)
-
                     # Apply update best for non-self ranks
                     if (parent_num == 0) and self._update_best_flag:
                         multi_slice_add(self._running_best, self._rand_num_table,
                                         dimension_slices, perturbation_slices, rank % 2 == 0)
 
+                    perturbation_slices = self._draw_random_table_slices(self._worker_rngs[rank])
+                    dimension_slices, perturbation_slices = match_slices(master_dim_slices, perturbation_slices)
+
+                # first divide the gradient with weight w, then add perturbation and multiply with w
+                # again, such that only this perturbation is weighted in the end, supposedly faster
+                multi_slice_divide(g, self._weights[parent_num],
+                                   dimension_slices)
+                multi_slice_add(g, self._rand_num_table,
+                                dimension_slices, perturbation_slices, rank % 2 == 0)
+                multi_slice_multiply(g, self._weights[parent_num],
+                                     dimension_slices)
             else:
                 if rank != self._rank:
+                    # advance the random draw for all other workers, such that they stay synchronised
                     self._draw_random_table_slices(self._worker_rngs[rank])
 
-        multi_slice_assign(self._theta, self._old_theta,
-                           master_dim_slices, master_dim_slices)
+        if self._OpenAIES:
+            # update as done in github/deep-neuroevolution, weight decay done in optimizer
+            ur, self._theta = self.optimizer.update(-g)
+            self._update_ratios.append(ur)
+
+        else:  # old routine without optimizer
+            multi_slice_assign(self._theta, g, master_dim_slices, master_dim_slices)
 
     def _update_log(self, costs):
 
