@@ -384,7 +384,8 @@ class ES:
         timestep_limit = kwargs.get('timestep_limit', 10000)
         max_runs = kwargs.get('max_runs_per_eval', 5)
         novelty = kwargs.get('use_novelty', False)
-        self.obj_kwargs = {'env': self.env, 'timestep_limit': timestep_limit, 'max_runs': max_runs, 'novelty': novelty, 'rank': self._rank}
+        render = kwargs.get('render', False) if self._rank == 0 else False
+        self.obj_kwargs = {'env': self.env, 'timestep_limit': timestep_limit, 'max_runs': max_runs, 'novelty': novelty, 'rank': self._rank, 'render': render}
         self._step_size = np.float32(kwargs.get('step_size', 1.0))  # this is the noise_stdev parameter from Uber json-configs
         self._num_parameters = len(self._theta)
         self._num_mutations = kwargs.get('num_mutations', self._num_parameters)  # limited perturbartion ES as in Zhang et al 2017, ch.4.1

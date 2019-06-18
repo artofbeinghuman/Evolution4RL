@@ -138,7 +138,7 @@ class Policy(nn.Module):
         x = self.mlp(x)
         return torch.argmax(x, dim=1)  # action not chosen stochastically
 
-    def rollout(self, theta, env, timestep_limit, max_runs=5, novelty=False, rank=None):
+    def rollout(self, theta, env, timestep_limit, max_runs=5, novelty=False, rank=None, render=False):
         """
         rollout of the policy in the given env for no more than max_runs and no more than timestep_limit steps
         """
