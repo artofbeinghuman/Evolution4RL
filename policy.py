@@ -1,25 +1,21 @@
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.autograd import Variable
-from torch.nn.parameter import Parameter
-
 import json
-from tensorboardX import SummaryWriter
 import datetime
 
 
-class SimpleLogger(object):
-    def __init__(self, writer):
-        self.writer = writer
+# class SimpleLogger(object):
+#     def __init__(self, writer):
+#         self.writer = writer
 
-    def __call__(self, text):
-        writer.add_text('[LOG]', text)
+#     def __call__(self, text):
+#         writer.add_text('[LOG]', text)
 
 
-date = datetime.datetime.now()
-writer = SummaryWriter("runs/ESAtari-", comment=date)
-log = SimpleLogger(writer)
+# date = datetime.datetime.now()
+# writer = SummaryWriter("runs/ESAtari-", comment=date)
+# log = SimpleLogger(writer)
 
 
 # for virtual batch normalization, we need to sample a batch of (random) observations over which we calculate the parameters

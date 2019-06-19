@@ -10,11 +10,12 @@ short_names = [s[:-len("NoFrameskip-v4")] for s in envs]
 
 @click.command()
 @click.option('-g', '--game', default="Breakout")
+@click.option('-r', '--render', default=False)
 @click.option('-c', '--config', default="default")
 @click.option('-gens', '--generations', default=3)
 @click.option('-sig', '--step_size', default=0.005)
 @click.option('-s', '--seed', default=123)
-def es(game, config, generations, step_size, seed):
+def es(game, render, config, generations, step_size, seed):
     timestamp = datetime.datetime.now()
     if config == "default":
         config = "configurations/default_atari_config.json"
@@ -28,7 +29,7 @@ def es(game, config, generations, step_size, seed):
         with open(config, 'r') as f:
             config = json.loads(f.read())
     worker = ES(config, rand_num_table_size=2000000,
-                step_size=step_size, seed=seed, render=True, verbose=True)
+                step_size=step_size, seed=seed, render=render, verbose=True)
     try:
         worker(generations)
     except Exception as e:
