@@ -1,6 +1,5 @@
 import numpy as np
 from functools import partial
-import pickle
 import torch
 from policy import Policy
 from optimizers import SGD, Adam
@@ -295,9 +294,6 @@ def get_env_from(exp):
     return env
 
 
-# TODO: CHANGE COST TO REWARDS, THUS CHANGE LOGIC TO MAXIMIZE REWARDS INSTEAD OF MINIMIZE COST
-# TODO: implement mirrored sampling
-
 class ES:
     """
     Runs a basic distributed Evolutionary strategy using MPI. The centroid
@@ -348,20 +344,23 @@ class ES:
 
         """
 
+        # such that all objects can be dumped and reloaded
+
         # Initiate MPI
         from mpi4py import MPI
         self._MPI = MPI
         self._comm = MPI.COMM_WORLD
         self._rank = self._comm.Get_rank()
         self._size = self._comm.Get_size()
-        assert self._size % 2 == 0
+        if self._size > 1:
+            assert self._size % 2 == 0
 
-        print("This is worker", self._rank)
+        # print("This is worker", self._rank)
 
         self._global_seed = kwargs.get('seed', 123)
         torch.manual_seed(self._global_seed)
         self._global_rng = np.random.RandomState(self._global_seed)
-        self._seed_set = self._global_rng.choice(1000000, size=self._size // 2,
+        self._seed_set = self._global_rng.choice(1000000, size=int(np.ceil(self._size / 2)),
                                                  replace=False)
         # for mirrored sampling, two subsequent workers (according to rank) will have the same seed/rng
         # the even ranked workers will perturb positively, the odd ones negatively
@@ -417,7 +416,7 @@ class ES:
         self._update_best_flag = False
 
         # int(5 * 10**8)
-        self._rand_num_table_size = kwargs.get("rand_num_table_size", 250000000)  # 1GB of noise
+        self._rand_num_table_size = kwargs.get("rand_num_table_size", 200000)  # 250000000 ~ 1GB of noise
         nbytes = self._rand_num_table_size * MPI.FLOAT.Get_size() if self._rank == 0 else 0
         win = MPI.Win.Allocate_shared(nbytes, MPI.FLOAT.Get_size(), comm=self._comm)
         buf, itemsize = win.Shared_query(0)
@@ -435,12 +434,19 @@ class ES:
 
         self._update_ratios = []
 
-        print("{}: I am at the barrier!".format(self._rank))
+        # print("{}: I am at the barrier!".format(self._rank))
         self._comm.Barrier()
 
     def __getstate__(self):
 
-        state = {"_step_size": self._step_size,
+        state = {"exp": self.exp,
+                 "env": self.env,
+                 "obj_kwargs": self.obj_kwargs,
+                 "policy": self.policy,
+                 "optimizer": self.optimizer,
+                 "_OpenAIES": self._OpenAIES,
+                 "_update_ratios": self._update_ratios,
+                 "_step_size": self._step_size,
                  "_num_parameters": self._num_parameters,
                  "_num_mutations": self._num_mutations,
                  "_num_parents": self._num_parents,
@@ -475,11 +481,22 @@ class ES:
         self._comm = MPI.COMM_WORLD
         self._size = self._comm.Get_size()
         self._rank = self._comm.Get_rank()
-        self.objective = None
-        self.obj_args = None
+        torch.manual_seed(self._global_seed)
+        self.objective = self.policy.rollout
 
-        self._rand_num_table = self._global_rng.randn(self._rand_num_table_size)
-        self._rand_num_table *= self._step_size
+        nbytes = self._rand_num_table_size * MPI.FLOAT.Get_size() if self._rank == 0 else 0
+        win = MPI.Win.Allocate_shared(nbytes, MPI.FLOAT.Get_size(), comm=self._comm)
+        buf, itemsize = win.Shared_query(0)
+        assert itemsize == MPI.FLOAT.Get_size()
+        self._rand_num_table = np.ndarray(buffer=buf, dtype='f', shape=(self._rand_num_table_size,))
+        if self._rank == 0:
+            print("{}: Calculating Random Table".format(self._rank))
+            self._rand_num_table[:] = self._global_rng.randn(self._rand_num_table_size)
+            if not self._OpenAIES:
+                # Fold step-size into table values
+                self._rand_num_table *= self._step_size
+
+        self._comm.Barrier()
 
     def __call__(self, num_generations):
         """
@@ -665,7 +682,8 @@ class ES:
         :return: an evostrat object of this class
         """
         pickled_obj_file = open(filename, 'rb')
-        obj = pickle.load(pickled_obj_file)
+        # obj = pickle.load(pickled_obj_file)
+        obj = torch.load(pickled_obj_file)
         pickled_obj_file.close()
 
         return obj
@@ -676,5 +694,6 @@ class ES:
         """
         if self._rank == 0:
             pickled_obj_file = open(filename, 'wb')
-            pickle.dump(self, pickled_obj_file, 2)
+            # pickle.dump(self, pickled_obj_file, 2)
+            torch.save(self, pickled_obj_file)
             pickled_obj_file.close()

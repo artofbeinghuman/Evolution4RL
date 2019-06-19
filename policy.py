@@ -102,11 +102,11 @@ class Policy(nn.Module):
     def __init__(self, input_shape, output_shape, rng=np.random.RandomState(0)):
         super(Policy, self).__init__()
 
-        #self.env = env
+        # self.env = env
         self.rng = rng
         self._ref_batch = None
-        #input_shape = self.env.observation_space.shape
-        #output_shape = self.env.action_space.n
+        # input_shape = self.env.observation_space.shape
+        # output_shape = self.env.action_space.n
 
         def conv_output(width, kernel, stride, padding=0):
             return int((width - kernel + 2 * padding) // stride + 1)
@@ -144,6 +144,7 @@ class Policy(nn.Module):
         """
         # update policy
         self.set_from_flat(theta)
+        memory_clear_mask = self.rng.choice(int(0.1 * timestep_limit), size=256)
 
         t, e = 0, 1
         rewards, novelty_vector = 0, []
@@ -171,16 +172,23 @@ class Policy(nn.Module):
             # do rollout
             obs = env.reset()
             for _ in range(timestep_limit - t):
-                action = self.forward(to_obs_tensor(obs))
+                action = int(self.forward(to_obs_tensor(obs)))
                 obs, rew, done, _ = env.step(action)
                 rewards += rew
                 self._ref_batch.append(obs)
+                # to save some memory, try to reduce the ref batch if it gets too large
+                if len(self._ref_batch) == 0.1 * timestep_limit:
+                    self._ref_batch = list(np.array(self._ref_batch)[memory_clear_mask])
                 if novelty:
                     novelty_vector.append(env.unwrapped._get_ram())
+                if render:
+                    # print(action)
+                    env.render()
 
                 t += 1
                 if done:
                     break
+            print("rollout ran for t=", t)
 
         mean_reward = rewards / e
         # return mean_reward, novelty_vector
@@ -196,9 +204,11 @@ class Policy(nn.Module):
         Initialises the module parameters
         """
         if isinstance(m, nn.Linear):
+            # nn.init.normal_(m.weight.data, mean=3.0, std=2.0)
             nn.init.xavier_uniform_(m.weight.data)
             nn.init.constant_(m.bias.data, 0)
         elif isinstance(m, nn.Conv2d):
+            # nn.init.normal_(m.weight.data, mean=3.0, std=2.0)
             nn.init.xavier_normal_(m.weight.data)
             nn.init.constant_(m.bias.data, 0)
 
