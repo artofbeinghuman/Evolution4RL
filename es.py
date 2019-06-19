@@ -389,17 +389,16 @@ class ES:
         self._num_parameters = len(self._theta)
         self._num_mutations = kwargs.get('num_mutations', self._num_parameters)  # limited perturbartion ES as in Zhang et al 2017, ch.4.1
         self._verbose = kwargs.get('verbose', False)
-
         self._OpenAIES = kwargs.get('OpenAIES', True)
 
         if self._OpenAIES:
             # use centered ranks [0.5, -0.5]
             self._num_parents = kwargs.get('num_parents', self._size)
             self._weights = np.arange(self._num_parents, 0, -1, dtype=np.float32)
-            self._weights /= np.array([self._num_parents])
+            self._weights /= np.array([self._num_parents], dtype=np.float32)
             self._weights -= 0.5
             # multiply 1/(sigma*N) factor directly at this point
-            self._weights /= np.array([self._num_parents * self._step_size])
+            self._weights /= np.array([self._num_parents * self._step_size], dtype=np.float32)
             self._weights.astype(np.float32, copy=False)
         else:
             # Classics ES:
@@ -506,6 +505,10 @@ class ES:
 
         partial_objective = partial(self.objective, **self.obj_kwargs)
         for i in range(num_generations):
+            if num_generations == 30:
+                self._weights *= np.array([self._step_size], dtype=np.float32)
+                self._step_size *= 0.5
+                self._weights /= np.array([self._num_parents * self._step_size])
             if self._verbose and (self._rank == 0):
                 print("Generation:", self._generation_number)
             self._update(partial_objective)
