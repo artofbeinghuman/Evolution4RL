@@ -4,7 +4,6 @@ runs/
 video/
 __pycache__/
 .ipynb_checkpoints/
-configurations/
 save/
 
 requ.txt
