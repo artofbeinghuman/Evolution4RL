@@ -10,7 +10,7 @@ short_names = [s[:-len("NoFrameskip-v4")] for s in envs]
 
 @click.command()
 @click.option('-g', '--game', default="Breakout")
-@click.option('-r', '--render', default=False)
+@click.option('-r', '--render', is_flag=True)
 @click.option('-c', '--config', default="default")
 @click.option('-gens', '--generations', default=3)
 @click.option('-sig', '--step_size', default=0.005)

@@ -2,20 +2,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import json
-import datetime
-
-
-# class SimpleLogger(object):
-#     def __init__(self, writer):
-#         self.writer = writer
-
-#     def __call__(self, text):
-#         writer.add_text('[LOG]', text)
-
-
-# date = datetime.datetime.now()
-# writer = SummaryWriter("runs/ESAtari-", comment=date)
-# log = SimpleLogger(writer)
 
 
 # for virtual batch normalization, we need to sample a batch of (random) observations over which we calculate the parameters
@@ -40,13 +26,6 @@ def get_ref_batch(env, batch_size=128, p=0.05):
 
 def to_obs_tensor(single_observation):
     return torch.tensor(single_observation.transpose(2, 0, 1)[np.newaxis, :, :, :])
-
-
-def run(exp_file):
-    with open(exp_file, 'r') as f:
-        exp = json.loads(f.read())
-
-    return exp
 
 
 class VirtualBatchNorm(nn.Module):
@@ -101,6 +80,7 @@ class Policy(nn.Module):
         # self.env = env
         self.rng = rng
         self._ref_batch = None
+        self.stochastic_activation = True
         # input_shape = self.env.observation_space.shape
         # output_shape = self.env.action_space.n
 
@@ -125,6 +105,7 @@ class Policy(nn.Module):
                                  nn.Linear(in_features=256, out_features=output_shape))
 
         self.apply(self.initialise_parameters)
+        self.eval()  # no gradients
 
     def forward(self, obs):
         # expect an input of form: N x C x H x W
@@ -132,7 +113,14 @@ class Policy(nn.Module):
         x = self.conv(obs)
         x = x.view(-1, self.lin_dim)
         x = self.mlp(x)
-        return torch.argmax(x, dim=1)  # action not chosen stochastically
+        return self.activation(x)
+
+    def activation(self, x):
+        if self.stochastic_activation:
+            x = nn.functional.softmax(x, dim=-1)
+            return torch.distributions.categorical.Categorical(probs=x).sample()
+        else:
+            return torch.argmax(x, dim=1)
 
     def rollout(self, theta, env, timestep_limit, max_runs=5, novelty=False, rank=None, render=False):
         """
@@ -178,13 +166,15 @@ class Policy(nn.Module):
                 if novelty:
                     novelty_vector.append(env.unwrapped._get_ram())
                 if render:
-                    # print(action)
+                    print(action)
                     env.render()
 
                 t += 1
                 if done:
                     break
-            print("rollout ran for t=", t)
+
+        if render:
+            env.close()
 
         mean_reward = rewards / e
         # return mean_reward, novelty_vector
@@ -200,12 +190,12 @@ class Policy(nn.Module):
         Initialises the module parameters
         """
         if isinstance(m, nn.Linear):
-            # nn.init.normal_(m.weight.data, mean=3.0, std=2.0)
-            nn.init.xavier_uniform_(m.weight.data)
+            nn.init.normal_(m.weight.data, mean=0, std=0.01)
+            # nn.init.xavier_uniform_(m.weight.data)
             nn.init.constant_(m.bias.data, 0)
         elif isinstance(m, nn.Conv2d):
-            # nn.init.normal_(m.weight.data, mean=3.0, std=2.0)
-            nn.init.xavier_normal_(m.weight.data)
+            nn.init.normal_(m.weight.data, mean=0, std=0.01)
+            # nn.init.xavier_normal_(m.weight.data)
             nn.init.constant_(m.bias.data, 0)
 
     def get_flat(self):
@@ -218,7 +208,7 @@ class Policy(nn.Module):
         """
         flat_parameters = []
         for m in self.modules():
-            if m.training and not isinstance(m, Policy) and not isinstance(m, nn.Sequential):
+            if not isinstance(m, Policy) and not isinstance(m, nn.Sequential):
                 for p in m.parameters():
                     flat_parameters.append(p.data.view(-1))
 
@@ -247,3 +237,20 @@ def get_env():
     from gym_wrappers import wrap_env
     env = gym.make("FrostbiteNoFrameskip-v4")
     return wrap_env(env)
+
+
+def get_pol():
+    env = get_env()
+    return env, Policy(env.observation_space.shape, env.action_space.n)
+
+
+def show_ob(ob):
+    import matplotlib.pyplot as plt
+    ob = np.squeeze(np.array(ob))
+    if ob.shape[-1] <= 4:
+        for i in range(ob.shape[-1]):
+            plt.subplot(2, 2, i + 1)
+            plt.axis('off')
+            plt.imshow(ob[:, :, i], cmap='gray', aspect='equal')
+    plt.subplots_adjust(wspace=0, hspace=0)
+    plt.show()

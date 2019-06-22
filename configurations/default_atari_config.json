@@ -7,7 +7,7 @@
     "noise_stdev": 0.005,
     "snapshot_freq": 20,
     "timestep_limit": 10000,
-    "max_runs_per_eval": 5,
+    "max_runs_per_eval": 10,
     "return_proc_mode": "centered_rank",
     "episode_cutoff_mode": 5000
   },
