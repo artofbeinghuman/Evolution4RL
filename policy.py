@@ -241,7 +241,12 @@ def get_env():
 
 def get_pol():
     env = get_env()
-    return env, Policy(env.observation_space.shape, env.action_space.n)
+    pol = Policy(env.observation_space.shape, env.action_space.n)
+    pol.freeze_VBN(False)
+    pol._ref_batch = get_ref_batch(env)
+    pol.forward(pol._ref_batch)
+    pol.freeze_VBN(True)
+    return env, pol
 
 
 def show_ob(ob):
@@ -254,3 +259,30 @@ def show_ob(ob):
             plt.imshow(ob[:, :, i], cmap='gray', aspect='equal')
     plt.subplots_adjust(wspace=0, hspace=0)
     plt.show()
+
+
+"""
+
+def act(obs):
+    # expect an input of form: N x C x H x W
+    # where N should be 1 (except for ref_batch), H=W=84 as per atari_wrappers.wrap_deepmind() and C=4 due to framestacking of 4 greyscale frames
+    x = pol.conv(obs)
+    x = x.view(-1, pol.lin_dim)
+    return pol.mlp(x)
+
+
+def test(ob=None, a=False):
+    if a:
+        pol.apply(initialise_parameters)
+        pol.eval()
+    print(pol.conv[0].weight.max(), pol.conv[0].weight.min())
+    print(pol.conv[3].weight.max(), pol.conv[3].weight.min())
+    print(pol.mlp[0].weight.max(), pol.mlp[0].weight.min())
+    print(pol.mlp[0].weight.max(), pol.mlp[0].weight.min())
+    if ob is None:
+        ob = to_obs_tensor(env.reset())
+    print(act(ob))
+    print(pol.forward(ob))
+
+
+"""
