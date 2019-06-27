@@ -4,8 +4,9 @@ runs/
 video/
 __pycache__/
 .ipynb_checkpoints/
-save/
+save/*
 
+*.pyc
 requ.txt
 test.py
 evolution.sublime-project

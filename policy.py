@@ -57,7 +57,8 @@ class VirtualBatchNorm(nn.Module):
         if self.update:
             mean, var = self.get_stats(x)
             if self.ref_mean is not None and self.ref_var is not None:
-                coeff = x.shape[0] / (self.batch_size + x.shape[0])
+                self.batch_size += x.shape[0]
+                coeff = x.shape[0] / self.batch_size
                 self.ref_mean = coeff * mean + (1 - coeff) * self.ref_mean
                 self.ref_var = coeff * var + (1 - coeff) * self.ref_var
             else:
@@ -133,25 +134,32 @@ class Policy(nn.Module):
         t, e = 0, 1
         rewards, novelty_vector = 0, []
 
+        self.freeze_VBN(False)
+        if self._ref_batch is None:
+            self._ref_batch = get_ref_batch(env)
+            self.forward(self._ref_batch)
+        self.freeze_VBN(True)
+
         # do rollouts until max_runs rollouts where done or
         # until time left is less than 70% of mean rollout length
         while e <= max_runs and (timestep_limit - t) >= 0.7 * t / e:
             if t == 0:
                 e = 0  # only start with 0 here to avoid issue in condition check for first loop
             e += 1
-            print("{}, run {}, timestep {}".format(rank, e, t))
+            # print("{}, run {}, timestep {}".format(rank, e, t))
+
             # initialise or update virtual batch normalization
-            self.freeze_VBN(False)
-            if self._ref_batch is None:
-                self._ref_batch = get_ref_batch(env)
-            else:  # suppose you have a list from the last run
-                # I figured it is faster to choose out of all obs of the last run,
-                # instead of flipping a coin after every observation
-                self._ref_batch = np.array(self._ref_batch)[self.rng.choice(int(len(self._ref_batch)), 64)]
-                self._ref_batch = torch.tensor(self._ref_batch.transpose(0, 3, 1, 2))
-            self.forward(self._ref_batch)
-            self.freeze_VBN(True)
-            self._ref_batch = []
+            # self.freeze_VBN(False)
+            # if self._ref_batch is None:
+            #     self._ref_batch = get_ref_batch(env)
+            # else:  # suppose you have a list from the last run
+            #     # I figured it is faster to choose out of all obs of the last run,
+            #     # instead of flipping a coin after every observation
+            #     self._ref_batch = np.array(self._ref_batch)[self.rng.choice(int(len(self._ref_batch)), 64)]
+            #     self._ref_batch = torch.tensor(self._ref_batch.transpose(0, 3, 1, 2))
+            # self.forward(self._ref_batch)
+            # self.freeze_VBN(True)
+            # self._ref_batch = []
 
             # do rollout
             obs = env.reset()
@@ -159,14 +167,14 @@ class Policy(nn.Module):
                 action = int(self.forward(to_obs_tensor(obs)))
                 obs, rew, done, _ = env.step(action)
                 rewards += rew
-                self._ref_batch.append(obs)
-                # to save some memory, try to reduce the ref batch if it gets too large
-                if len(self._ref_batch) == 0.1 * timestep_limit:
-                    self._ref_batch = list(np.array(self._ref_batch)[memory_clear_mask])
+                # self._ref_batch.append(obs)
+                # # to save some memory, try to reduce the ref batch if it gets too large
+                # if len(self._ref_batch) == 0.1 * timestep_limit:
+                #     self._ref_batch = list(np.array(self._ref_batch)[memory_clear_mask])
                 if novelty:
                     novelty_vector.append(env.unwrapped._get_ram())
                 if render:
-                    print(action)
+                    # print(action)
                     env.render()
 
                 t += 1
@@ -188,6 +196,7 @@ class Policy(nn.Module):
     def initialise_parameters(self, m):
         """
         Initialises the module parameters
+        http://archive.is/EGwsP
         """
         if isinstance(m, nn.Linear):
             nn.init.normal_(m.weight.data, mean=0, std=0.01)
