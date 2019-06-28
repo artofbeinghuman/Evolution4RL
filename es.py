@@ -433,6 +433,8 @@ class ES:
         self._max_param_step = kwargs.get("max_param_step", 1)
 
         self._update_ratios = []
+        if self._rank == 0:
+            self.log = kwargs.get("log", None)
 
         # print("{}: I am at the barrier!".format(self._rank))
         self._comm.Barrier()
@@ -510,8 +512,8 @@ class ES:
                 self._weights *= np.array([self._step_size], dtype=np.float32)
                 self._step_size *= 0.5
                 self._weights /= np.array([self._num_parents * self._step_size])
-            if self._verbose and (self._rank == 0):
-                print("Generation:", self._generation_number)
+            # if self._verbose and (self._rank == 0):
+            #     print("Generation:", self._generation_number)
             self._update(partial_objective)
             self._generation_number += 1
 
@@ -554,7 +556,7 @@ class ES:
         # Run objective
         local_rew = np.empty(1, dtype=np.float32)
         local_rew[0] = objective(self._theta)
-        print("{}, gen {}, reward {}".format(self._rank, self._generation_number, local_rew[0]))
+        # print("{}, gen {}, reward {}".format(self._rank, self._generation_number, local_rew[0]))
 
         # Consolidate return values
         all_rewards = np.empty(self._size, dtype=np.float32)
@@ -562,6 +564,10 @@ class ES:
         self._comm.Allgather([local_rew, self._MPI.FLOAT],
                              [all_rewards, self._MPI.FLOAT])
         self._update_log(all_rewards)
+        if self._rank == 0:
+            print("Mean reward in gen {}: {}".format(self._generation_number, np.sum(all_rewards)))
+            if self.log is not None:
+                self.log.write("Mean reward in gen {}: {}".format(self._generation_number, np.sum(all_rewards)))
 
         self._update_theta(all_rewards, unmatched_dimension_slices,
                            dimension_slices, perturbation_slices)
@@ -628,9 +634,9 @@ class ES:
         else:  # old routine without optimizer
             multi_slice_assign(self._theta, g, master_dim_slices, master_dim_slices)
 
-    def _update_log(self, costs):
+    def _update_log(self, all_rewards):
 
-        self._score_history.append(costs)
+        self._score_history.append(all_rewards)
 
     @property
     def centroid(self):
