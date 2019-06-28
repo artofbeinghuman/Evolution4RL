@@ -16,7 +16,8 @@ short_names = [s[:-len("NoFrameskip-v4")] for s in envs]
 @click.option('-sig', '--step_size', default=1.0)  # 0.005
 @click.option('-s', '--seed', default=123)
 @click.option('-rn', '--random_noise_size', default=2000000)
-def es(game, render, config, generations, step_size, seed, random_noise_size):
+@click.option('-c', '--classic_es', is_flag=True)
+def es(game, render, config, generations, step_size, seed, random_noise_size, classic_es):
     timestamp = datetime.datetime.now()
 
     if config == "default":
@@ -35,7 +36,7 @@ def es(game, render, config, generations, step_size, seed, random_noise_size):
     txt = "Log {}\n\nWith parameters: \ngame={} ({}) \nrender={} \nconfig={} \ngenerations={} \nstep_size={} \nseed={} \nrandom_noise_size={}\n".format(path, config['env_short'], config['env_id'], render, config, generations, step_size, seed, random_noise_size)
 
     worker = ES(config, rand_num_table_size=random_noise_size,
-                step_size=step_size, seed=seed, render=render, verbose=True, log_path=path, initial_text=txt)
+                step_size=step_size, seed=seed, render=render, verbose=True, log_path=path, initial_text=txt, classic_es=classic_es)
     worker(generations)
     worker.save(path)
 

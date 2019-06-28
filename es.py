@@ -402,7 +402,7 @@ class ES:
         self._num_parameters = len(self._theta)
         self._num_mutations = kwargs.get('num_mutations', self._num_parameters)  # limited perturbartion ES as in Zhang et al 2017, ch.4.1
         self._verbose = kwargs.get('verbose', False)
-        self._OpenAIES = kwargs.get('OpenAIES', True)
+        self._OpenAIES = not kwargs.get('classic_es', True)
 
         if self._OpenAIES:
             # use centered ranks [0.5, -0.5]
@@ -503,13 +503,15 @@ class ES:
         buf, itemsize = win.Shared_query(0)
         assert itemsize == MPI.FLOAT.Get_size()
         self._rand_num_table = np.ndarray(buffer=buf, dtype='f', shape=(self._rand_num_table_size,))
-        if self._rank == 0:
-            t = time.time()
-            self._rand_num_table[:] = self._global_rng.randn(self._rand_num_table_size)
-            log(self, "Calculated Random Table in {}s".format(time.time() - t))
-            if not self._OpenAIES:
-                # Fold step-size into table values
-                self._rand_num_table *= self._step_size
+        # won't load hugh noise table on local laptop
+        if False:
+            if self._rank == 0:
+                t = time.time()
+                self._rand_num_table[:] = self._global_rng.randn(self._rand_num_table_size)
+                log(self, "Calculated Random Table in {}s".format(time.time() - t))
+                if not self._OpenAIES:
+                    # Fold step-size into table values
+                    self._rand_num_table *= self._step_size
 
         self._comm.Barrier()
 
