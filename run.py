@@ -15,7 +15,8 @@ short_names = [s[:-len("NoFrameskip-v4")] for s in envs]
 @click.option('-gens', '--generations', default=3)
 @click.option('-sig', '--step_size', default=1.0)  # 0.005
 @click.option('-s', '--seed', default=123)
-def es(game, render, config, generations, step_size, seed):
+@click.option('-rn', '--random_noise_size', default=2000000)
+def es(game, render, config, generations, step_size, seed, random_noise_size):
     timestamp = datetime.datetime.now()
     if config == "default":
         config = "configurations/default_atari_config.json"
@@ -28,13 +29,15 @@ def es(game, render, config, generations, step_size, seed):
     else:
         with open(config, 'r') as f:
             config = json.loads(f.read())
-    worker = ES(config, rand_num_table_size=2000000,
+
+    worker = ES(config, rand_num_table_size=random_noise_size,
                 step_size=step_size, seed=seed, render=render, verbose=True)
     try:
         worker(generations)
     except Exception as e:
         print("Error during", e)
-    path = "save/{}-{}".format(config["env_short"], timestamp)
+
+    path = "save/{}-{}_{}".format(config["env_short"], str(timestamp.date()), str(timestamp.time()))
     worker.save(path)
 
 

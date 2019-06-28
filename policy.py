@@ -129,7 +129,7 @@ class Policy(nn.Module):
         """
         # update policy
         self.set_from_flat(theta)
-        memory_clear_mask = self.rng.choice(int(0.1 * timestep_limit), size=256)
+        # memory_clear_mask = self.rng.choice(int(0.1 * timestep_limit), size=256)
 
         t, e = 0, 1
         rewards, novelty_vector = 0, []

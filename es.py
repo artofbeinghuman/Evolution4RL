@@ -193,8 +193,8 @@ def build_slices(start_step, iterator_size, size_of_slice, step_size):
     """
 
     if step_size >= iterator_size:
-        raise NotImplementedError("Error: step size must be less than the "
-                                  + "size of the iterator")
+        raise NotImplementedError("Error: step size must be less than the " +
+                                  "size of the iterator")
     end_step = start_step + step_size * size_of_slice
     slices = []
     slice_start = start_step
@@ -203,8 +203,8 @@ def build_slices(start_step, iterator_size, size_of_slice, step_size):
         if remaining > iterator_size:
             remaining = iterator_size
 
-        slice_end = (slice_start + 1) + ((remaining
-                                          - (slice_start + 1)) // step_size) * step_size
+        slice_end = (slice_start + 1) + ((remaining -
+                                          (slice_start + 1)) // step_size) * step_size
         slices.append(np.s_[slice_start:slice_end:step_size])  # s_ creates slice
         slice_start = (slice_end - 1 + step_size) % iterator_size
 
@@ -395,8 +395,9 @@ class ES:
             # use centered ranks [0.5, -0.5]
             self._num_parents = kwargs.get('num_parents', self._size)
             self._weights = np.arange(self._num_parents, 0, -1, dtype=np.float32)
-            self._weights /= np.array([self._num_parents], dtype=np.float32)
+            self._weights = self._weights / np.array([self._num_parents], dtype=np.float32)
             self._weights -= 0.5
+            self._weights[self._num_parents // 2] = 0.001  # to avoid divide by zero
             # multiply 1/(sigma*N) factor directly at this point
             self._weights /= np.array([self._num_parents * self._step_size], dtype=np.float32)
             self._weights.astype(np.float32, copy=False)
@@ -700,3 +701,4 @@ class ES:
             # pickle.dump(self, pickled_obj_file, 2)
             torch.save(self, pickled_obj_file)
             pickled_obj_file.close()
+            print("Saved to", filename)
