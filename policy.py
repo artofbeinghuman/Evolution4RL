@@ -188,6 +188,24 @@ class Policy(nn.Module):
         # return mean_reward, novelty_vector
         return mean_reward
 
+    def play(self, env, theta=None):
+        if theta is not None:
+            self.set_from_flat(theta)
+
+        t, rewards = 0, 0
+        obs = env.reset()
+        done = False
+        while not done:
+            action = int(self.forward(to_obs_tensor(obs)))
+            obs, rew, done, _ = env.step(action)
+            rewards += rew
+            env.render()
+            t += 1
+            if done:
+                break
+        env.close()
+        print("Ended after {} with reward {}.".format(t, rewards))
+
     def freeze_VBN(self, freeze):
         for m in self.modules():
             if isinstance(m, VirtualBatchNorm):
