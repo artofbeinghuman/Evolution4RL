@@ -32,15 +32,16 @@ def es(game, render, config, generations, step_size, seed, random_noise_size):
             config = json.loads(f.read())
 
     path = "save/{}-{}_{}".format(config["env_short"], str(timestamp.date()), str(timestamp.time()))
-    log = open(path + ".log", 'w+')
-    log.write("Log {}\n\nWith parameters: \ngame={} ({}) \nrender={} \nconfig={} \ngenerations={} \nstep_size={} \nseed={} \nrandom_noise_size={}\n"
-              .format(path, config['env_short'], config['env_id'], render, config, generations, step_size, seed, random_noise_size))
+    txt = "Log {}\n\nWith parameters: \ngame={} ({}) \nrender={} \nconfig={} \ngenerations={} \nstep_size={} \nseed={} \nrandom_noise_size={}\n".format(path, config['env_short'], config['env_id'], render, config, generations, step_size, seed, random_noise_size)
 
     worker = ES(config, rand_num_table_size=random_noise_size,
-                step_size=step_size, seed=seed, render=render, verbose=True, log=log)
+                step_size=step_size, seed=seed, render=render, verbose=True, log_path=path, initial_text=txt)
     worker(generations)
     worker.save(path)
 
 
 if __name__ == '__main__':
     es()
+
+
+# mpievo 72 -sig 0.5 -g pong -gens 500 -rn 800000000

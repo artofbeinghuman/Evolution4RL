@@ -298,7 +298,9 @@ def get_env_from(exp):
 def log(es, msg):
     if es._rank == 0:
         if es.log is not None:
-            es.log.write(msg)
+            es.log.write("\n" + msg)
+            es.log.flush()
+            print(msg)
 
 
 class ES:
@@ -363,6 +365,10 @@ class ES:
             assert self._size % 2 == 0
 
         # print("This is worker", self._rank)
+
+        if self._rank == 0:
+            self.log = open(kwargs.get("log_path", "No_path_specified") + ".log", 'w+')
+            log(self, kwargs.get("initial_text", "\n"))
 
         self._global_seed = kwargs.get('seed', 123)
         torch.manual_seed(self._global_seed)
@@ -430,8 +436,9 @@ class ES:
         assert itemsize == MPI.FLOAT.Get_size()
         self._rand_num_table = np.ndarray(buffer=buf, dtype='f', shape=(self._rand_num_table_size,))
         if self._rank == 0:
-            print("{}: Calculating Random Table".format(self._rank))
+            t = time.time()
             self._rand_num_table[:] = self._global_rng.randn(self._rand_num_table_size)
+            log(self, "Calculated Random Table in {}s".format(time.time() - t))
             if not self._OpenAIES:
                 # Fold step-size into table values
                 self._rand_num_table *= self._step_size
@@ -440,8 +447,6 @@ class ES:
         self._max_param_step = kwargs.get("max_param_step", 1)
 
         self._update_ratios = []
-        if self._rank == 0:
-            self.log = kwargs.get("log", None)
 
         # print("{}: I am at the barrier!".format(self._rank))
         self._comm.Barrier()
@@ -499,8 +504,9 @@ class ES:
         assert itemsize == MPI.FLOAT.Get_size()
         self._rand_num_table = np.ndarray(buffer=buf, dtype='f', shape=(self._rand_num_table_size,))
         if self._rank == 0:
-            print("{}: Calculating Random Table".format(self._rank))
+            t = time.time()
             self._rand_num_table[:] = self._global_rng.randn(self._rand_num_table_size)
+            log(self, "Calculated Random Table in {}s".format(time.time() - t))
             if not self._OpenAIES:
                 # Fold step-size into table values
                 self._rand_num_table *= self._step_size
@@ -524,9 +530,11 @@ class ES:
             #     print("Generation:", self._generation_number)
             self._update(partial_objective)
             self._generation_number += 1
-            log("Gen {} took {}s.".format(self._generation_number, time.time() - t))
+            log(self, "Gen {} took {}s.".format(self._generation_number, time.time() - t))
             t = time.time()
-        log("\nFinished run in {}s.".format(time.time() - tt))
+        log(self, "\nFinished run in {}s.".format(time.time() - tt))
+        if self._rank == 0:
+            self.log.close()
 
     def _draw_random_table_slices(self, rng):
         """
@@ -575,9 +583,8 @@ class ES:
         self._comm.Allgather([local_rew, self._MPI.FLOAT],
                              [all_rewards, self._MPI.FLOAT])
         self._update_log(all_rewards)
-        if self._rank == 0:
-            print("Mean reward in gen {}: {}".format(self._generation_number, np.sum(all_rewards)))
-            log("Mean reward in gen {}: {}".format(self._generation_number, np.sum(all_rewards)))
+
+        log(self, "Mean reward in gen {}: {}".format(self._generation_number, np.sum(all_rewards) / self._size))
 
         self._update_theta(all_rewards, unmatched_dimension_slices,
                            dimension_slices, perturbation_slices)
