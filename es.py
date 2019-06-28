@@ -3,6 +3,7 @@ from functools import partial
 import torch
 from policy import Policy
 from optimizers import SGD, Adam
+import time
 
 # Credit goes to Nathaniel Rodriguez from whom I adopted large parts of this code
 # https://github.com/Nathaniel-Rodriguez/evostrat/blob/master/evostrat/evostrat.py
@@ -294,6 +295,12 @@ def get_env_from(exp):
     return env
 
 
+def log(es, msg):
+    if es._rank == 0:
+        if es.log is not None:
+            es.log.write(msg)
+
+
 class ES:
     """
     Runs a basic distributed Evolutionary strategy using MPI. The centroid
@@ -505,17 +512,21 @@ class ES:
         :param num_generations: how many generations it will run for
         :return: None
         """
-
+        t = time.time()
+        tt = time.time()
         partial_objective = partial(self.objective, **self.obj_kwargs)
         for i in range(num_generations):
-            if num_generations == 30:
-                self._weights *= np.array([self._step_size], dtype=np.float32)
-                self._step_size *= 0.5
-                self._weights /= np.array([self._num_parents * self._step_size])
+            # if num_generations == 30:
+            #     self._weights *= np.array([self._step_size], dtype=np.float32)
+            #     self._step_size *= 0.5
+            #     self._weights /= np.array([self._num_parents * self._step_size])
             # if self._verbose and (self._rank == 0):
             #     print("Generation:", self._generation_number)
             self._update(partial_objective)
             self._generation_number += 1
+            log("Gen {} took {}s.".format(self._generation_number, time.time() - t))
+            t = time.time()
+        log("\nFinished run in {}s.".format(time.time() - tt))
 
     def _draw_random_table_slices(self, rng):
         """
@@ -566,8 +577,7 @@ class ES:
         self._update_log(all_rewards)
         if self._rank == 0:
             print("Mean reward in gen {}: {}".format(self._generation_number, np.sum(all_rewards)))
-            if self.log is not None:
-                self.log.write("Mean reward in gen {}: {}".format(self._generation_number, np.sum(all_rewards)))
+            log("Mean reward in gen {}: {}".format(self._generation_number, np.sum(all_rewards)))
 
         self._update_theta(all_rewards, unmatched_dimension_slices,
                            dimension_slices, perturbation_slices)
