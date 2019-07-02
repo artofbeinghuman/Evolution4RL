@@ -216,13 +216,14 @@ class Policy(nn.Module):
         Initialises the module parameters
         http://archive.is/EGwsP
         """
+        gain = 1.0
         if isinstance(m, nn.Linear):
             # nn.init.normal_(m.weight.data, mean=0, std=0.01)
-            nn.init.xavier_uniform_(m.weight.data)
+            nn.init.xavier_uniform_(m.weight.data, gain=gain)
             nn.init.constant_(m.bias.data, 0)
         elif isinstance(m, nn.Conv2d):
             # nn.init.normal_(m.weight.data, mean=0, std=0.01)
-            nn.init.xavier_normal_(m.weight.data)
+            nn.init.xavier_normal_(m.weight.data, gain=gain)
             nn.init.constant_(m.bias.data, 0)
 
     def get_flat(self):

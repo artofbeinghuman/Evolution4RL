@@ -303,6 +303,14 @@ def log(es, msg):
             print(msg)
 
 
+def get_hms_string(s):
+    m = s // 60
+    s %= 60
+    h = m // 60
+    m %= 60
+    return "{}h:{}min:{}s".format(h, m, s)
+
+
 class ES:
     """
     Runs a basic distributed Evolutionary strategy using MPI. The centroid
@@ -412,7 +420,7 @@ class ES:
             self._weights -= 0.5
             self._weights[self._num_parents // 2] = 0.001  # to avoid divide by zero
             # multiply 1/(sigma*N) factor directly at this point
-            self._weights /= np.array([self._num_parents * self._step_size], dtype=np.float32)
+            # self._weights /= np.array([self._num_parents * self._step_size], dtype=np.float32)
             self._weights.astype(np.float32, copy=False)
         else:
             # Classics ES:
@@ -508,9 +516,8 @@ class ES:
                 t = time.time()
                 self._rand_num_table[:] = self._global_rng.randn(self._rand_num_table_size)
                 log(self, "Calculated Random Table in {}s".format(time.time() - t))
-                if not self._OpenAIES:
-                    # Fold step-size into table values
-                    self._rand_num_table *= self._step_size
+                # Fold step-size into table values
+                self._rand_num_table *= self._step_size
 
         self._comm.Barrier()
 
@@ -533,7 +540,7 @@ class ES:
             self._generation_number += 1
             log(self, "Gen {} took {}s.".format(self._generation_number, time.time() - t))
             t = time.time()
-        log(self, "\nFinished run in {}s.\n".format(time.time() - tt))
+        log(self, "\nFinished run in " + get_hms_string(time.time() - tt))
         if self._rank == 0:
             self.log.close()
 
@@ -585,10 +592,11 @@ class ES:
                              [all_rewards, self._MPI.FLOAT])
         self._update_log(all_rewards)
 
-        log(self, "Mean reward in gen {}: {}".format(self._generation_number, np.sum(all_rewards) / self._size))
-
         self._update_theta(all_rewards, unmatched_dimension_slices,
                            dimension_slices, perturbation_slices)
+
+        log(self, "Mean reward in gen {}: {:.2f}, Best: {:.2f}"
+            .format(self._generation_number, np.sum(all_rewards) / self._size, np.max(all_rewards)))
 
     def _update_theta(self, all_rewards, master_dim_slices, local_dim_slices,
                       local_perturbation_slices):
@@ -647,6 +655,7 @@ class ES:
         if self._OpenAIES:
             # update as done in github/deep-neuroevolution, weight decay done in optimizer
             ur, self._theta = self.optimizer.update(-g)
+            log(self, "Update ratio: {}".format(ur))
             self._update_ratios.append(ur)
 
         else:  # old routine without optimizer
@@ -725,4 +734,4 @@ class ES:
             # pickle.dump(self, pickled_obj_file, 2)
             torch.save(self, pickled_obj_file)
             pickled_obj_file.close()
-            print("Saved to", filename)
+            print("Saved to", filename + '.es')

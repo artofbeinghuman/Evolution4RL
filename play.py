@@ -14,34 +14,50 @@ short_names = [s[:-len("NoFrameskip-v4")] for s in envs]
 
 @click.command()
 @click.option('-g', '--game', default="Breakout")
-def play(game):
+@click.option('-r', '--random', is_flag=True)
+def play(game, random):
     game = game.capitalize()
     i = short_names.index(game)
-    env = wrap_env(gym.make(envs[i]))
+    env = gym.make(envs[i])
+    env = wrap_env(env, fire_reset=env.get_action_meanings()[1] == 'FIRE')
     i = 0
-    for _ in range(1):
-        _ = env.reset()
-        while i < 3100:
-            # time.sleep(0.3)
-            _, _, done, info = env.step(3)  # env.action_space.sample())
-            env.render()
-            i += 1
-            print(i, done, info)
-            if done:
-                print("I QUIT!")
-                break
+    if random:
+        for _ in range(3):
+            _ = env.reset()
+            while True:
+                # time.sleep(0.3)
+                _, rew, done, info = env.step(env.action_space.sample())  # env.action_space.sample())
+                env.render()
+                i += 1
+                print(i, rew, done, info)
+                if done:
+                    print("I QUIT!")
+                    break
 
-        for j in range(18):
-            i += 1
-            print(j)
-            time.sleep(1)
-            if done:
-                print("I QUIT!")
-                break
-            _, _, done, info = env.step(j)  # env.action_space.sample())
-            env.render()
+    else:
+        for _ in range(1):
+            _ = env.reset()
+            while i < 3100:
+                # time.sleep(0.3)
+                _, _, done, info = env.step(3)  # env.action_space.sample())
+                env.render()
+                i += 1
+                print(i, done, info)
+                if done:
+                    print("I QUIT!")
+                    break
 
-        time.sleep(5)
+            for j in range(18):
+                i += 1
+                print(j)
+                time.sleep(1)
+                if done:
+                    print("I QUIT!")
+                    break
+                _, _, done, info = env.step(j)  # env.action_space.sample())
+                env.render()
+
+            time.sleep(5)
 
     env.close()
     print(env.get_action_meanings())

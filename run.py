@@ -38,11 +38,11 @@ def es(game, render, config, generations, step_size, seed, random_noise_size, cl
     worker = ES(config, rand_num_table_size=random_noise_size,
                 step_size=step_size, seed=seed, render=render, verbose=True, log_path=path, initial_text=txt, classic_es=classic_es)
     worker(generations)
-    worker.save(path)
+    worker.save(path + '.es')
 
 
 if __name__ == '__main__':
     es()
 
 
-# mpievo 72 -sig 0.5 -g pong -gens 500 -rn 800000000
+# mpievo 72 -sig 10.0 -g pong -gens 200 -rn 800000000 -c
