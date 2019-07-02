@@ -33,7 +33,7 @@ def es(game, render, config, generations, step_size, seed, random_noise_size, cl
             config = json.loads(f.read())
 
     path = "save/{}-{}_{}".format(config["env_short"], str(timestamp.date()), str(timestamp.time()))
-    txt = "Log {}\n\nWith parameters: \ngame={} ({}) \nrender={} \nconfig={} \ngenerations={} \nstep_size={} \nseed={} \nrandom_noise_size={}\n".format(path, config['env_short'], config['env_id'], render, config, generations, step_size, seed, random_noise_size)
+    txt = "Log {}\n\nWith parameters: \ngame={} ({}) \nrender={} \nconfig={} \ngenerations={} \nstep_size={} \nseed={} \nrandom_noise_size={} \nclassic_es={} \n".format(path, config['env_short'], config['env_id'], render, config, generations, step_size, seed, random_noise_size, classic_es)
 
     worker = ES(config, rand_num_table_size=random_noise_size,
                 step_size=step_size, seed=seed, render=render, verbose=True, log_path=path, initial_text=txt, classic_es=classic_es)

@@ -438,10 +438,9 @@ class ES:
         if self._rank == 0:
             t = time.time()
             self._rand_num_table[:] = self._global_rng.randn(self._rand_num_table_size)
-            log(self, "Calculated Random Table in {}s".format(time.time() - t))
-            if not self._OpenAIES:
-                # Fold step-size into table values
-                self._rand_num_table *= self._step_size
+            log(self, "Calculated Random Table in {}s.".format(time.time() - t))
+            # Fold step-size into noise
+            self._rand_num_table *= self._step_size
 
         self._max_table_step = kwargs.get("max_table_step", 5)
         self._max_param_step = kwargs.get("max_param_step", 1)
@@ -503,7 +502,7 @@ class ES:
         buf, itemsize = win.Shared_query(0)
         assert itemsize == MPI.FLOAT.Get_size()
         self._rand_num_table = np.ndarray(buffer=buf, dtype='f', shape=(self._rand_num_table_size,))
-        # won't load hugh noise table on local laptop
+        # won't load huge noise table on local laptop
         if False:
             if self._rank == 0:
                 t = time.time()
@@ -534,7 +533,7 @@ class ES:
             self._generation_number += 1
             log(self, "Gen {} took {}s.".format(self._generation_number, time.time() - t))
             t = time.time()
-        log(self, "\nFinished run in {}s.".format(time.time() - tt))
+        log(self, "\nFinished run in {}s.\n".format(time.time() - tt))
         if self._rank == 0:
             self.log.close()
 
@@ -722,7 +721,7 @@ class ES:
         objectives and their args are not saved with the ES
         """
         if self._rank == 0:
-            pickled_obj_file = open(filename, 'wb')
+            pickled_obj_file = open(filename + '.es', 'wb')
             # pickle.dump(self, pickled_obj_file, 2)
             torch.save(self, pickled_obj_file)
             pickled_obj_file.close()

@@ -204,7 +204,7 @@ class Policy(nn.Module):
             if done:
                 break
         env.close()
-        print("Ended after {} with reward {}.".format(t, rewards))
+        print("Ended after {} game steps with reward {}.".format(t, rewards))
 
     def freeze_VBN(self, freeze):
         for m in self.modules():
