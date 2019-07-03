@@ -18,7 +18,8 @@ short_names = [s[:-len("NoFrameskip-v4")] for s in envs]
 @click.option('-rn', '--random_noise_size', default=2000000)
 @click.option('-c', '--classic_es', is_flag=True)
 @click.option('-sa', '--stochastic_activation', is_flag=True)
-def es(game, render, config, generations, step_size, seed, random_noise_size, classic_es, stochastic_activation):
+@click.option('--gain', default=1.0)
+def es(game, render, config, generations, step_size, seed, random_noise_size, classic_es, stochastic_activation, gain):
     timestamp = datetime.datetime.now()
 
     if config == "default":
@@ -34,10 +35,9 @@ def es(game, render, config, generations, step_size, seed, random_noise_size, cl
             config = json.loads(f.read())
 
     path = "save/{}-{}_{}".format(config["env_short"], str(timestamp.date()), str(timestamp.time()))
-    txt = "Log {}\n\nWith parameters: \ngame={} ({}) \nrender={} \nconfig={} \ngenerations={} \nstep_size={} \nseed={} \nrandom_noise_size={} \nclassic_es={} \nstochastic_activation={} \n".format(path, config['env_short'], config['env_id'], render, config, generations, step_size, seed, random_noise_size, classic_es, stochastic_activation)
+    txt = "Log {}\n\nWith parameters: \ngame={} ({}) \nconfig={} \ngenerations={} \nstep_size={} \nseed={} \nrandom_noise_size={} \nclassic_es={} \nstochastic_activation={} \ngain={} \n".format(path, config['env_short'], config['env_id'], config, generations, step_size, seed, random_noise_size, classic_es, stochastic_activation, gain)
 
-    worker = ES(config, rand_num_table_size=random_noise_size,
-                step_size=step_size, seed=seed, render=render, verbose=True, log_path=path, initial_text=txt, classic_es=classic_es)
+    worker = ES(config, rand_num_table_size=random_noise_size, step_size=step_size, seed=seed, render=render, verbose=True, log_path=path, initial_text=txt, classic_es=classic_es, stochastic_activation=stochastic_activation, gain=gain)
     worker(generations)
     worker.save(path + '.es')
 

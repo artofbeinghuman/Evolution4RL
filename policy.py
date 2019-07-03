@@ -82,6 +82,7 @@ class Policy(nn.Module):
         self.rng = rng
         self._ref_batch = None
         self.stochastic_activation = True
+        self.gain = 1.0
         # input_shape = self.env.observation_space.shape
         # output_shape = self.env.action_space.n
 
@@ -223,14 +224,14 @@ class Policy(nn.Module):
         Initialises the module parameters
         http://archive.is/EGwsP
         """
-        gain = 1.0
+
         if isinstance(m, nn.Linear):
             # nn.init.normal_(m.weight.data, mean=0, std=0.01)
-            nn.init.xavier_uniform_(m.weight.data, gain=gain)
+            nn.init.xavier_uniform_(m.weight.data, gain=self.gain)
             nn.init.constant_(m.bias.data, 0)
         elif isinstance(m, nn.Conv2d):
             # nn.init.normal_(m.weight.data, mean=0, std=0.01)
-            nn.init.xavier_normal_(m.weight.data, gain=gain)
+            nn.init.xavier_normal_(m.weight.data, gain=self.gain)
             nn.init.constant_(m.bias.data, 0)
 
     def get_flat(self):

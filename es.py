@@ -98,6 +98,7 @@ class ES:
         self.env = get_env_from(exp)
         self.policy = Policy(self.env.observation_space.shape, self.env.action_space.n, self._worker_rngs[self._rank])
         self.policy.stochastic_activation = kwargs.get('stochastic_activation', False)
+        self.policy.gain = kwargs.get('gain', 1.0)
         self._theta = self.policy.get_flat()
         self.optimizer = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](self._theta, **exp['optimizer']['args'])
         self._update_ratios = []
@@ -128,14 +129,14 @@ class ES:
             self._weights.astype(np.float32, copy=False)
         else:
             # Classics ES:
-            self._num_parents = kwargs.get('num_parents', int(self._size / 2))  # truncated selection
+            self._num_parents = kwargs.get('num_parents', int(self._size / 3))  # truncated selection
             # self._num_parents = 1  # int(np.ceil(0.1 * self._size))
             self._weights = np.log(self._num_parents + 0.5) - np.log(
                 np.arange(1, self._num_parents + 1))
             self._weights = self._weights / np.sum(self._weights)
             self._weights.astype(np.float32, copy=False)
 
-            self._update_ratios = ['classic update']
+            self._update_ratios = [' - ']
 
         # State
         self._old_theta = self._theta.copy()
@@ -238,8 +239,8 @@ class ES:
             #     self._weights *= np.array([self._step_size], dtype=np.float32)
             #     self._step_size *= 0.5
             #     self._weights /= np.array([self._num_parents * self._step_size])
-            self._update(partial_objective)
             self._generation_number += 1
+            self._update(partial_objective)
             log(self, "Gen {} took {}s.".format(self._generation_number, time.time() - t))
             t = time.time()
         log(self, "\nFinished run in " + get_hms_string(time.time() - tt) + ".\n")
@@ -303,13 +304,10 @@ class ES:
             t = time.time()
             self._update_theta(all_rewards, unmatched_dimension_slices,
                                dimension_slices, perturbation_slices)
-            log(self, "Gradient update: {:.3f}s, Policy evaluation: {:.2f}s, Update ratio: {}".format(time.time() - t, tt, self._update_ratios[-1]))
+            log(self, "Gen {} | Mean reward: {:.2f}, Best: {}, {:.2f} || Grad update: {:.3f}s, Pol eval: {:.2f}s, Update ratio: {}".format(self._generation_number, np.sum(all_rewards) / self._size, np.argmax(all_rewards), np.max(all_rewards), time.time() - t, tt, self._update_ratios[-1]))
         else:
             self._update_theta(all_rewards, unmatched_dimension_slices,
                                dimension_slices, perturbation_slices)
-
-        log(self, "Mean reward in gen {}: {:.2f}, Best: {}, {:.2f}"
-            .format(self._generation_number, np.sum(all_rewards) / self._size, np.argmax(all_rewards), np.max(all_rewards)))
 
     def _update_theta(self, all_rewards, master_dim_slices, local_dim_slices,
                       local_perturbation_slices):
@@ -327,6 +325,8 @@ class ES:
 
         for parent_num, rank in enumerate(np.argsort(all_rewards)[::-1]):
             if parent_num < self._num_parents:
+                if parent_num == 0:
+                    assert all_rewards[rank] == np.max(all_rewards)
                 # Begin Update sequence for the running best if applicable
                 if (parent_num == 0) and (all_rewards[rank] <= self._running_best_cost):
                     self._update_best_flag = True
@@ -349,20 +349,17 @@ class ES:
 
                 # first divide the gradient with weight w, then add perturbation and multiply with w
                 # again, such that only this perturbation is weighted in the end, supposedly faster
-                multi_slice_divide(g, self._weights[parent_num],
-                                   dimension_slices)
-                multi_slice_add(g, self._rand_num_table,
-                                dimension_slices, perturbation_slices, rank % 2 == 0)
-                multi_slice_multiply(g, self._weights[parent_num],
-                                     dimension_slices)
+                multi_slice_divide(g, self._weights[parent_num], dimension_slices)
+                multi_slice_add(g, self._rand_num_table, dimension_slices, perturbation_slices, rank % 2 == 0)
+                multi_slice_multiply(g, self._weights[parent_num], dimension_slices)
+
             else:
                 if rank != self._rank:
                     # advance the random draw for all other workers, such that they stay synchronised
                     self._draw_random_table_slices(self._worker_rngs[rank])
 
         if self._OpenAIES:
-            # update as done in github/deep-neuroevolution, weight decay done in optimizer
-            ur, self._theta = self.optimizer.update(-g)
+            ur, self._theta = self.optimizer.update(g)
             self._update_ratios.append(ur)
 
         else:  # old routine without optimizer, here g is already the new theta
