@@ -315,8 +315,8 @@ class ES:
     """
     Runs a basic distributed Evolutionary strategy using MPI. The centroid
     is updated via a log-rank weighted sum of the population members that are
-    generated from a normal distribution. This class evaluates a COST function
-    rather than a fitness function.
+    generated from a normal distribution. This class evaluates a reward function
+    ie fitness function.
 
     Creates a large RN table
     Draws a proper basic slice (start,stop,step) from RN table
@@ -390,14 +390,14 @@ class ES:
         self.exp = exp
         self.env = get_env_from(exp)
         self.policy = Policy(self.env.observation_space.shape, self.env.action_space.n, self._worker_rngs[self._rank])
-        self.policy.stochastic_activation = False
+        self.policy.stochastic_activation = kwargs.get('stochastic_activation', False)
         self._theta = self.policy.get_flat()
         self.optimizer = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](self._theta, **exp['optimizer']['args'])
 
         # User input parameters
         self.objective = self.policy.rollout
-        timestep_limit = kwargs.get('timestep_limit', 10000)
-        max_runs = kwargs.get('max_runs_per_eval', 5)
+        timestep_limit = exp['config']['timestep_limit']  # kwargs.get('timestep_limit', 10000)
+        max_runs = exp['config']['max_runs_per_eval']  # kwargs.get('max_runs_per_eval', 5)
         novelty = kwargs.get('use_novelty', False)
         render = kwargs.get('render', False) if self._rank == 0 else False
         self.obj_kwargs = {'env': self.env, 'timestep_limit': timestep_limit, 'max_runs': max_runs, 'novelty': novelty, 'rank': self._rank, 'render': render}
@@ -408,20 +408,22 @@ class ES:
 
         if self._OpenAIES:
             # use centered ranks [0.5, -0.5]
-            self._num_parents = kwargs.get('num_parents', self._size)
+            # self._num_parents = kwargs.get('num_parents', self._size)
+            self._num_parents = 1  # int(np.ceil(0.1 * self._size))
             self._weights = np.arange(self._num_parents, 0, -1, dtype=np.float32)
-            self._weights = self._weights / np.array([self._num_parents], dtype=np.float32)
-            self._weights -= 0.5
-            self._weights[self._num_parents // 2] = 0.001  # to avoid divide by zero
-            # multiply 1/(sigma*N) factor directly at this point
-            self._weights /= np.array([self._num_parents * self._step_size], dtype=np.float32)
+            self._weights = self._weights / np.sum(self._weights)
+            # self._weights = self._weights / np.array([self._num_parents], dtype=np.float32)
+            # self._weights -= 0.5
+            # self._weights[self._num_parents // 2] = 0.001  # to avoid divide by zero
+            # multiply 1/sigma factor directly at this point,
+            # self._weights /= np.array([self._step_size], dtype=np.float32)
             self._weights.astype(np.float32, copy=False)
         else:
             # Classics ES:
             self._num_parents = kwargs.get('num_parents', int(self._size / 2))  # truncated selection
             self._weights = np.log(self._num_parents + 0.5) - np.log(
                 np.arange(1, self._num_parents + 1))
-            self._weights /= np.sum(self._weights)
+            self._weights = self._weights / np.sum(self._weights)
             self._weights.astype(np.float32, copy=False)
 
         # State
@@ -531,7 +533,7 @@ class ES:
             self._generation_number += 1
             log(self, "Gen {} took {}s.".format(self._generation_number, time.time() - t))
             t = time.time()
-        log(self, "\nFinished run in " + get_hms_string(time.time() - tt))
+        log(self, "\nFinished run in " + get_hms_string(time.time() - tt) + ".\n")
         if self._rank == 0:
             self.log.close()
 
@@ -649,7 +651,7 @@ class ES:
             log(self, "Update ratio: {}".format(ur))
             self._update_ratios.append(ur)
 
-        else:  # old routine without optimizer
+        else:  # old routine without optimizer, here g is already the new theta
             multi_slice_assign(self._theta, g, master_dim_slices, master_dim_slices)
 
     def _update_log(self, all_rewards):
@@ -666,37 +668,39 @@ class ES:
 
         return self._running_best.copy()
 
-    def plot_cost_over_time(self, prefix='test', logy=True, savefile=False):
+    def plot_reward_over_time(self, prefix='test', logy=True, savefile=False):
         """
-        Plots the evolutionary history of the population's cost.
-        Includes min cost individual for each generation the mean
+        Plots the evolutionary history of the population's reward.
+        Includes min reward individual for each generation the mean
         """
         if self._rank == 0:
             import matplotlib.pyplot as plt
 
-            costs_by_generation = np.array(self._score_history)
-            min_cost_by_generation = np.min(costs_by_generation, axis=1)
-            mean_cost_by_generation = np.mean(costs_by_generation, axis=1)
+            rewards_by_generation = np.array(self._score_history)
+            min_reward_by_generation = np.max(rewards_by_generation, axis=1)
+            mean_reward_by_generation = np.mean(rewards_by_generation, axis=1)
 
-            plt.plot(range(len(mean_cost_by_generation)),
-                     mean_cost_by_generation,
-                     marker='None', ls='-', color='blue', label='mean cost')
+            plt.plot(range(len(mean_reward_by_generation)),
+                     mean_reward_by_generation,
+                     marker='None', ls='-', color='blue', label='mean reward')
 
-            plt.plot(range(len(min_cost_by_generation)),
-                     min_cost_by_generation, ls='--', marker='None',
+            plt.plot(range(len(min_reward_by_generation)),
+                     min_reward_by_generation, ls='--', marker='None',
                      color='red', label='best')
             if logy:
                 plt.yscale('log')
             plt.grid(True)
             plt.xlabel('generation')
-            plt.ylabel('cost')
+            plt.ylabel('reward')
             plt.legend(loc='upper right')
             plt.tight_layout()
 
             if savefile:
-                plt.savefig(prefix + "_evocost.png", dpi=300)
+                path = "save/" + prefix + "_evoreward.png"
+                plt.savefig(path, dpi=300)
                 plt.close()
                 plt.clf()
+                print("plotted to", path)
             else:
                 plt.show()
                 plt.clf()
