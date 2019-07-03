@@ -141,7 +141,7 @@ class ES:
         # State
         self._old_theta = self._theta.copy()
         self._running_best = self._theta.copy()
-        self._running_best_cost = np.float32(np.finfo(np.float32).max)
+        self._running_best_reward = np.float32(np.finfo(np.float32).max)
         self._update_best_flag = False
 
         # int(5 * 10**8)
@@ -186,7 +186,7 @@ class ES:
                  "_score_history": self._score_history,
                  "_theta": self._theta,
                  "_running_best": self._running_best,
-                 "_running_best_cost": self._running_best_cost,
+                 "_running_best_reward": self._running_best_reward,
                  "_update_best_flag": self._update_best_flag,
                  "_rand_num_table_size": self._rand_num_table_size,
                  "_max_table_step": self._max_table_step,
@@ -328,9 +328,9 @@ class ES:
                 if parent_num == 0:
                     assert all_rewards[rank] == np.max(all_rewards)
                 # Begin Update sequence for the running best if applicable
-                if (parent_num == 0) and (all_rewards[rank] <= self._running_best_cost):
+                if (parent_num == 0) and (all_rewards[rank] >= self._running_best_reward):
                     self._update_best_flag = True
-                    self._running_best_cost = all_rewards[rank]
+                    self._running_best_reward = all_rewards[rank]
                     # Since the best is always first, copy centroid (theta) elements
                     self._running_best[:] = self._old_theta  # unperturbed theta
 
