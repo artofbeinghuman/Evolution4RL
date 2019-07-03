@@ -30,8 +30,10 @@ def play(game, random):
                 env.render()
                 i += 1
                 print(i, rew, done, info)
+                if rew > 0.0:
+                    time.sleep(1)
                 if done:
-                    print("I QUIT!")
+                    print("I QUIT!\n")
                     break
 
     else:
@@ -44,7 +46,7 @@ def play(game, random):
                 i += 1
                 print(i, done, info)
                 if done:
-                    print("I QUIT!")
+                    print("I QUIT!\n")
                     break
 
             for j in range(18):
@@ -52,7 +54,7 @@ def play(game, random):
                 print(j)
                 time.sleep(1)
                 if done:
-                    print("I QUIT!")
+                    print("I QUIT!\n")
                     break
                 _, _, done, info = env.step(j)  # env.action_space.sample())
                 env.render()
@@ -74,7 +76,7 @@ if __name__ == '__main__':
     #     i += 1
     #     print(i, done, info)
     #     if done:
-    #         print("I QUIT!")
+    #         print("I QUIT!\n")
     #         break
 
     # while True and not done:
@@ -84,7 +86,7 @@ if __name__ == '__main__':
     #     i += 1
     #     print(i, done, info)
     #     if done:
-    #         print("I QUIT!")
+    #         print("I QUIT!\n")
     #         break
 
 # Frostbite:

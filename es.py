@@ -194,8 +194,8 @@ def build_slices(start_step, iterator_size, size_of_slice, step_size):
     """
 
     if step_size >= iterator_size:
-        raise NotImplementedError("Error: step size must be less than the " +
-                                  "size of the iterator")
+        raise NotImplementedError("Error: step size must be less than the "
+                                  + "size of the iterator")
     end_step = start_step + step_size * size_of_slice
     slices = []
     slice_start = start_step
@@ -204,8 +204,8 @@ def build_slices(start_step, iterator_size, size_of_slice, step_size):
         if remaining > iterator_size:
             remaining = iterator_size
 
-        slice_end = (slice_start + 1) + ((remaining -
-                                          (slice_start + 1)) // step_size) * step_size
+        slice_end = (slice_start + 1) + ((remaining
+                                          - (slice_start + 1)) // step_size) * step_size
         slices.append(np.s_[slice_start:slice_end:step_size])  # s_ creates slice
         slice_start = (slice_end - 1 + step_size) % iterator_size
 
@@ -308,7 +308,7 @@ def get_hms_string(s):
     s %= 60
     h = m // 60
     m %= 60
-    return "{}h:{}min:{}s".format(h, m, s)
+    return "{}h:{}min:{:.1f}s".format(int(h), int(m), s)
 
 
 class ES:
@@ -357,12 +357,8 @@ class ES:
         :param use_novelty (optional): whether to employ novelty weighted updating
         :param OpenAIES (optional): whether to run the ES in the OpenAI style or traditionally (put optimizer in exp json!)
         :param num_parents (optional): for truncated selection, default for OpenAIES = all (=number of workers), for !OpenAIES = 0.5*number of workers
-        :param verbose (optional): True/False. print info on run
 
         """
-
-        # such that all objects can be dumped and reloaded
-
         # Initiate MPI
         from mpi4py import MPI
         self._MPI = MPI
@@ -371,8 +367,6 @@ class ES:
         self._size = self._comm.Get_size()
         if self._size > 1:
             assert self._size % 2 == 0
-
-        # print("This is worker", self._rank)
 
         if self._rank == 0:
             self.log = open(kwargs.get("log_path", "No_path_specified") + ".log", 'w+')
@@ -396,6 +390,7 @@ class ES:
         self.exp = exp
         self.env = get_env_from(exp)
         self.policy = Policy(self.env.observation_space.shape, self.env.action_space.n, self._worker_rngs[self._rank])
+        self.policy.stochastic_activation = False
         self._theta = self.policy.get_flat()
         self.optimizer = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](self._theta, **exp['optimizer']['args'])
 
@@ -409,7 +404,6 @@ class ES:
         self._step_size = np.float32(kwargs.get('step_size', 1.0))  # this is the noise_stdev parameter from Uber json-configs
         self._num_parameters = len(self._theta)
         self._num_mutations = kwargs.get('num_mutations', self._num_parameters)  # limited perturbartion ES as in Zhang et al 2017, ch.4.1
-        self._verbose = kwargs.get('verbose', False)
         self._OpenAIES = not kwargs.get('classic_es', True)
 
         if self._OpenAIES:
@@ -420,7 +414,7 @@ class ES:
             self._weights -= 0.5
             self._weights[self._num_parents // 2] = 0.001  # to avoid divide by zero
             # multiply 1/(sigma*N) factor directly at this point
-            # self._weights /= np.array([self._num_parents * self._step_size], dtype=np.float32)
+            self._weights /= np.array([self._num_parents * self._step_size], dtype=np.float32)
             self._weights.astype(np.float32, copy=False)
         else:
             # Classics ES:
@@ -471,7 +465,6 @@ class ES:
                  "_num_parameters": self._num_parameters,
                  "_num_mutations": self._num_mutations,
                  "_num_parents": self._num_parents,
-                 "_verbose": self._verbose,
                  "_global_seed": self._global_seed,
                  "_weights": self._weights,
                  "_global_rng": self._global_rng,
@@ -534,8 +527,6 @@ class ES:
             #     self._weights *= np.array([self._step_size], dtype=np.float32)
             #     self._step_size *= 0.5
             #     self._weights /= np.array([self._num_parents * self._step_size])
-            # if self._verbose and (self._rank == 0):
-            #     print("Generation:", self._generation_number)
             self._update(partial_objective)
             self._generation_number += 1
             log(self, "Gen {} took {}s.".format(self._generation_number, time.time() - t))
@@ -730,8 +721,8 @@ class ES:
         objectives and their args are not saved with the ES
         """
         if self._rank == 0:
-            pickled_obj_file = open(filename + '.es', 'wb')
+            pickled_obj_file = open(filename, 'wb')
             # pickle.dump(self, pickled_obj_file, 2)
             torch.save(self, pickled_obj_file)
             pickled_obj_file.close()
-            print("Saved to", filename + '.es')
+            print("Saved to", filename)

@@ -50,7 +50,7 @@ class VirtualBatchNorm(nn.Module):
 
     def get_stats(self, x):
         mean = x.mean(0, keepdim=True)
-        var = (x ** 2).mean(0, keepdim=True) - mean**2
+        var = ((x - mean)**2).mean(0, keepdim=True)
         return mean, var
 
     def forward(self, x):
@@ -122,6 +122,13 @@ class Policy(nn.Module):
             return torch.distributions.categorical.Categorical(probs=x).sample()
         else:
             return torch.argmax(x, dim=1)
+        """
+        if np.random.rand() < 0.1:
+           x = nn.functional.softmax(x, dim=-1)
+           return torch.distributions.categorical.Categorical(probs=x).sample()
+        else:
+           return torch.argmax(x, dim=1)
+        """
 
     def rollout(self, theta, env, timestep_limit, max_runs=5, novelty=False, rank=None, render=False):
         """
@@ -136,7 +143,7 @@ class Policy(nn.Module):
 
         self.freeze_VBN(False)
         if self._ref_batch is None:
-            self._ref_batch = get_ref_batch(env)
+            self._ref_batch = get_ref_batch(env, batch_size=256)
             self.forward(self._ref_batch)
         self.freeze_VBN(True)
 
@@ -216,7 +223,7 @@ class Policy(nn.Module):
         Initialises the module parameters
         http://archive.is/EGwsP
         """
-        gain = 1.0
+        gain = 10.0
         if isinstance(m, nn.Linear):
             # nn.init.normal_(m.weight.data, mean=0, std=0.01)
             nn.init.xavier_uniform_(m.weight.data, gain=gain)

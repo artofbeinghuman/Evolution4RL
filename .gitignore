@@ -5,7 +5,7 @@ video/
 __pycache__/
 .ipynb_checkpoints/
 save/*
-
+No_*
 *.pyc
 requ.txt
 test.py
