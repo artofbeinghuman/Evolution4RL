@@ -100,6 +100,7 @@ class ES:
         self.policy.stochastic_activation = kwargs.get('stochastic_activation', False)
         self._theta = self.policy.get_flat()
         self.optimizer = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](self._theta, **exp['optimizer']['args'])
+        self._update_ratios = []
 
         # User input parameters
         self.objective = self.policy.rollout
@@ -115,24 +116,26 @@ class ES:
 
         if self._OpenAIES:
             # use centered ranks [0.5, -0.5]
-            # self._num_parents = kwargs.get('num_parents', self._size)
-            self._num_parents = 1  # int(np.ceil(0.1 * self._size))
+            self._num_parents = kwargs.get('num_parents', self._size)
+            # self._num_parents = 1  # int(np.ceil(0.1 * self._size))
             self._weights = np.arange(self._num_parents, 0, -1, dtype=np.float32)
-            self._weights = self._weights / np.sum(self._weights)
-            # self._weights = self._weights / np.array([self._num_parents], dtype=np.float32)
-            # self._weights -= 0.5
-            # self._weights[self._num_parents // 2] = 0.001  # to avoid divide by zero
+            # self._weights = self._weights / np.sum(self._weights)
+            self._weights = self._weights / np.array([self._num_parents], dtype=np.float32)
+            self._weights -= 0.5
+            self._weights[self._num_parents // 2] = 0.001  # to avoid divide by zero
             # multiply 1/sigma factor directly at this point,
-            # self._weights /= np.array([self._step_size], dtype=np.float32)
+            self._weights /= np.array([self._step_size], dtype=np.float32)
             self._weights.astype(np.float32, copy=False)
         else:
             # Classics ES:
-            # self._num_parents = kwargs.get('num_parents', int(self._size / 2))  # truncated selection
-            self._num_parents = 1  # int(np.ceil(0.1 * self._size))
+            self._num_parents = kwargs.get('num_parents', int(self._size / 2))  # truncated selection
+            # self._num_parents = 1  # int(np.ceil(0.1 * self._size))
             self._weights = np.log(self._num_parents + 0.5) - np.log(
                 np.arange(1, self._num_parents + 1))
             self._weights = self._weights / np.sum(self._weights)
             self._weights.astype(np.float32, copy=False)
+
+            self._update_ratios = ['classic update']
 
         # State
         self._old_theta = self._theta.copy()
@@ -156,8 +159,6 @@ class ES:
 
         self._max_table_step = kwargs.get("max_table_step", 5)
         self._max_param_step = kwargs.get("max_param_step", 1)
-
-        self._update_ratios = []
 
         # print("{}: I am at the barrier!".format(self._rank))
         self._comm.Barrier()
@@ -282,8 +283,14 @@ class ES:
                         dimension_slices, perturbation_slices, self._rank % 2 == 0)
 
         # Run objective
-        local_rew = np.empty(1, dtype=np.float32)
-        local_rew[0] = objective(self._theta)
+        if self._rank == 0:
+            t = time.time()
+            local_rew = np.empty(1, dtype=np.float32)
+            local_rew[0] = objective(self._theta)
+            tt = time.time() - t
+        else:
+            local_rew = np.empty(1, dtype=np.float32)
+            local_rew[0] = objective(self._theta)
         # print("{}, gen {}, reward {}".format(self._rank, self._generation_number, local_rew[0]))
 
         # Consolidate return values
@@ -292,12 +299,17 @@ class ES:
         self._comm.Allgather([local_rew, self._MPI.FLOAT],
                              [all_rewards, self._MPI.FLOAT])
         self._update_log(all_rewards)
+        if self._rank == 0:
+            t = time.time()
+            self._update_theta(all_rewards, unmatched_dimension_slices,
+                               dimension_slices, perturbation_slices)
+            log(self, "Gradient update: {:.3f}s, Policy evaluation: {:.2f}s, Update ratio: {}".format(time.time() - t, tt, self._update_ratios[-1]))
+        else:
+            self._update_theta(all_rewards, unmatched_dimension_slices,
+                               dimension_slices, perturbation_slices)
 
-        self._update_theta(all_rewards, unmatched_dimension_slices,
-                           dimension_slices, perturbation_slices)
-
-        log(self, "Mean reward in gen {}: {:.2f}, Best: {:.2f}"
-            .format(self._generation_number, np.sum(all_rewards) / self._size, np.max(all_rewards)))
+        log(self, "Mean reward in gen {}: {:.2f}, Best: {}, {:.2f}"
+            .format(self._generation_number, np.sum(all_rewards) / self._size, np.argmax(all_rewards), np.max(all_rewards)))
 
     def _update_theta(self, all_rewards, master_dim_slices, local_dim_slices,
                       local_perturbation_slices):
@@ -313,7 +325,7 @@ class ES:
         else:
             g = self._old_theta
 
-        for parent_num, rank in enumerate(np.argsort(all_rewards)):
+        for parent_num, rank in enumerate(np.argsort(all_rewards)[::-1]):
             if parent_num < self._num_parents:
                 # Begin Update sequence for the running best if applicable
                 if (parent_num == 0) and (all_rewards[rank] <= self._running_best_cost):
@@ -323,11 +335,6 @@ class ES:
                     self._running_best[:] = self._old_theta  # unperturbed theta
 
                 if rank == self._rank:
-                    # Update running best for self ranks
-                    # if (parent_num == 0) and self._update_best_flag:
-                    #     multi_slice_add(self._running_best, self._rand_num_table,
-                    #                     local_dim_slices, local_perturbation_slices, rank % 2 == 0)
-
                     dimension_slices = local_dim_slices
                     perturbation_slices = local_perturbation_slices
 
@@ -356,7 +363,6 @@ class ES:
         if self._OpenAIES:
             # update as done in github/deep-neuroevolution, weight decay done in optimizer
             ur, self._theta = self.optimizer.update(-g)
-            log(self, "Update ratio: {}".format(ur))
             self._update_ratios.append(ur)
 
         else:  # old routine without optimizer, here g is already the new theta

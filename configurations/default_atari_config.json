@@ -15,8 +15,8 @@
   "env_short": "",
   "optimizer": {
     "args": {
-      "stepsize": 1.0,
-      "l2coeff": 0.0
+      "stepsize": 0.01,
+      "l2coeff": 0.005
     },
     "type": "adam"
   },
