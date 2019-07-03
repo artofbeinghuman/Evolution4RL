@@ -46,4 +46,4 @@ if __name__ == '__main__':
     es()
 
 
-# mpievo 72 -sig 1.0 -g seaquest -gens 80 -rn 800000000
+# mpievo 72 -g seaquest -gens 80 -rn 800000000

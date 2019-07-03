@@ -33,7 +33,7 @@ class SGD(Optimizer):
 
 
 class Adam(Optimizer):
-    def __init__(self, theta, stepsize, l2coeff=0.005, beta1=0.9, beta2=0.999, epsilon=1e-08):
+    def __init__(self, theta, stepsize=0.01, l2coeff=0.005, beta1=0.9, beta2=0.999, epsilon=1e-08):
         Optimizer.__init__(self, theta)
         self.stepsize = stepsize
         self.beta1 = beta1
