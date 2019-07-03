@@ -319,7 +319,6 @@ class ES:
 
         if self._OpenAIES:
             g = np.zeros_like(self._theta, dtype=np.float32)
-            # dann alles hierauf summieren, dann als update_ratio, self._theta = optimizer.update(-g)
         else:
             g = self._old_theta
 
