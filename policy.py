@@ -239,21 +239,29 @@ class Policy(nn.Module):
         operations might be avoided.
         """
         flat_parameters = []
-        for m in self.modules():
-            if not isinstance(m, Policy) and not isinstance(m, nn.Sequential):
-                for p in m.parameters():
-                    flat_parameters.append(p.data.view(-1))
+        # for m in self.modules():
+        #     if not isinstance(m, Policy) and not isinstance(m, nn.Sequential):
+        #         for p in m.parameters():
+        #             flat_parameters.append(p.data.view(-1))
+
+        for p in self.mlp[3].parameters():
+            flat_parameters.append(p.data.view(-1))
 
         return np.concatenate(flat_parameters)
 
     def set_from_flat(self, flat_parameters):
         start = 0
-        for m in self.modules():
-            if m.training and not isinstance(m, Policy) and not isinstance(m, nn.Sequential):
-                for p in m.parameters():
-                    size = np.prod(p.data.shape)
-                    p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
-                    start += size
+        # for m in self.modules():
+        #     if not isinstance(m, Policy) and not isinstance(m, nn.Sequential):
+        #         for p in m.parameters():
+        #             size = np.prod(p.data.shape)
+        #             p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
+        #             start += size
+
+        for p in self.mlp[3].parameters():
+            size = np.prod(p.data.shape)
+            p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
+            start += size
 
     def set_ref_batch(self, ref_batch):
         self.ref_list = []
