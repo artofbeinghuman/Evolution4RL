@@ -4,7 +4,7 @@ import torch
 from policy import Policy
 from optimizers import SGD, Adam
 import time
-from evo_utils import multi_slice_add, multi_slice_multiply, multi_slice_divide, multi_slice_assign, random_slices, match_slices, get_env_from, get_hms_string
+from evo_utils import *
 
 # Credit goes to Nathaniel Rodriguez from whom I adopted large parts of this code
 # https://github.com/Nathaniel-Rodriguez/evostrat/blob/master/evostrat/evostrat.py
@@ -141,7 +141,7 @@ class ES:
         # State
         self._old_theta = self._theta.copy()
         self._running_best = self._theta.copy()
-        self._running_best_reward = np.float32(np.finfo(np.float32).max)
+        self._running_best_reward = np.float32(np.finfo(np.float32).min)
         self._update_best_flag = False
 
         # int(5 * 10**8)
@@ -270,18 +270,15 @@ class ES:
     def _update(self, objective):
 
         # Perturb centroid
-        unmatched_dimension_slices = self._draw_random_parameter_slices(
-            self._global_rng)
-        unmatched_perturbation_slices = self._draw_random_table_slices(
-            self._worker_rngs[self._rank])
+        unmatched_dimension_slices = self._draw_random_parameter_slices(self._global_rng)
+        unmatched_perturbation_slices = self._draw_random_table_slices(self._worker_rngs[self._rank])
 
         # Match slices against each other
-        dimension_slices, perturbation_slices = match_slices(
-            unmatched_dimension_slices,
-            unmatched_perturbation_slices)
+        dimension_slices, perturbation_slices = match_slices(unmatched_dimension_slices,
+                                                             unmatched_perturbation_slices)
         # Apply perturbations
-        multi_slice_add(self._theta, self._rand_num_table,
-                        dimension_slices, perturbation_slices, self._rank % 2 == 0)
+        multi_slice_add(self._theta, self._rand_num_table, dimension_slices,
+                        perturbation_slices, self._rank % 2 == 0)
 
         # Run objective
         if self._rank == 0:
@@ -292,7 +289,6 @@ class ES:
         else:
             local_rew = np.empty(1, dtype=np.float32)
             local_rew[0] = objective(self._theta)
-        # print("{}, gen {}, reward {}".format(self._rank, self._generation_number, local_rew[0]))
 
         # Consolidate return values
         all_rewards = np.empty(self._size, dtype=np.float32)
@@ -302,12 +298,10 @@ class ES:
         self._update_log(all_rewards)
         if self._rank == 0:
             t = time.time()
-            self._update_theta(all_rewards, unmatched_dimension_slices,
-                               dimension_slices, perturbation_slices)
+            self._update_theta(all_rewards, unmatched_dimension_slices, dimension_slices, perturbation_slices)
             log(self, "Gen {} | Mean reward: {:.2f}, Best: {}, {:.2f} || Grad update: {:.3f}s, Pol eval: {:.2f}s, Update ratio: {}".format(self._generation_number, np.sum(all_rewards) / self._size, np.argmax(all_rewards), np.max(all_rewards), time.time() - t, tt, self._update_ratios[-1]))
         else:
-            self._update_theta(all_rewards, unmatched_dimension_slices,
-                               dimension_slices, perturbation_slices)
+            self._update_theta(all_rewards, unmatched_dimension_slices, dimension_slices, perturbation_slices)
 
     def _update_theta(self, all_rewards, master_dim_slices, local_dim_slices,
                       local_perturbation_slices):
@@ -330,6 +324,7 @@ class ES:
                 if (parent_num == 0) and (all_rewards[rank] >= self._running_best_reward):
                     self._update_best_flag = True
                     self._running_best_reward = all_rewards[rank]
+                    log(self, "## New running best: {:.2f} ##".format(self._running_best_reward))
                     # Since the best is always first, copy centroid (theta) elements
                     self._running_best[:] = self._old_theta  # unperturbed theta
 

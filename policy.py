@@ -119,17 +119,13 @@ class Policy(nn.Module):
 
     def activation(self, x):
         if self.stochastic_activation:
-            x = nn.functional.softmax(x, dim=-1)
-            return torch.distributions.categorical.Categorical(probs=x).sample()
+            if np.random.rand() < 0.1:
+                x = nn.functional.softmax(x, dim=-1)
+                return torch.distributions.categorical.Categorical(probs=x).sample()
+            else:
+                return torch.argmax(x, dim=1)
         else:
             return torch.argmax(x, dim=1)
-        """
-        if np.random.rand() < 0.1:
-           x = nn.functional.softmax(x, dim=-1)
-           return torch.distributions.categorical.Categorical(probs=x).sample()
-        else:
-           return torch.argmax(x, dim=1)
-        """
 
     def rollout(self, theta, env, timestep_limit, max_runs=5, novelty=False, rank=None, render=False):
         """
@@ -144,7 +140,7 @@ class Policy(nn.Module):
 
         self.freeze_VBN(False)
         if self._ref_batch is None:
-            self._ref_batch = get_ref_batch(env, batch_size=256)
+            self._ref_batch = get_ref_batch(env, batch_size=512, p=0.2)
             self.forward(self._ref_batch)
         self.freeze_VBN(True)
 
@@ -271,7 +267,7 @@ class Policy(nn.Module):
 def get_env():
     import gym
     from gym_wrappers import wrap_env
-    env = gym.make("FrostbiteNoFrameskip-v4")
+    env = gym.make("SeaquestNoFrameskip-v4")
     return wrap_env(env)
 
 
