@@ -269,8 +269,6 @@ class ES:
 
     def _update(self, objective):
 
-        if self._rank == 0:
-            t = time.time()
         # Perturb centroid
         unmatched_dimension_slices = self._draw_random_parameter_slices(self._global_rng)
         unmatched_perturbation_slices = self._draw_random_table_slices(self._worker_rngs[self._rank])
@@ -284,11 +282,11 @@ class ES:
 
         # Run objective
         if self._rank == 0:
-            mt = time.time() - t
             t = time.time()
             local_rew = np.empty(1, dtype=np.float32)
             local_rew[0] = objective(self._theta)
             tt = time.time() - t
+            gt = time.time()
         else:
             local_rew = np.empty(1, dtype=np.float32)
             local_rew[0] = objective(self._theta)
@@ -300,9 +298,10 @@ class ES:
                              [all_rewards, self._MPI.FLOAT])
         self._update_log(all_rewards)
         if self._rank == 0:
+            gt = time.time() - gt
             t = time.time()
             self._update_theta(all_rewards, unmatched_dimension_slices, dimension_slices, perturbation_slices)
-            log(self, "Gen {} | Mean reward: {:.2f}, Best: {}, {:.2f} || Match: {:.3f}s, Grad update: {:.3f}s, Pol eval: {:.2f}s, Update ratio: {}".format(self._generation_number, np.sum(all_rewards) / self._size, np.argmax(all_rewards), np.max(all_rewards), mt, time.time() - t, tt, self._update_ratios[-1]))
+            log(self, "Gen {} | Mean reward: {:.2f}, Best: {}, {:.2f} || Gather: {:.2f}s, Grad update: {:.3f}s, Pol eval: {:.2f}s, Update ratio: {}".format(self._generation_number, np.sum(all_rewards) / self._size, np.argmax(all_rewards), np.max(all_rewards), gt, time.time() - t, tt, self._update_ratios[-1]))
         else:
             self._update_theta(all_rewards, unmatched_dimension_slices, dimension_slices, perturbation_slices)
 

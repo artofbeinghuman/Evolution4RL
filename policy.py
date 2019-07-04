@@ -74,6 +74,38 @@ class VirtualBatchNorm(nn.Module):
         return (self.repr)
 
 
+"""
+# slim network
+        conv1_out = conv_output(input_shape[-2], 8, 4)
+        conv2_out = conv_output(conv1_out, 4, 2)
+        conv3_out = conv_output(conv2_out, 3, 2)
+        self.conv = nn.Sequential(nn.Conv2d(in_channels=input_shape[-1], out_channels=16,
+                                            kernel_size=8, stride=4),
+                                  VirtualBatchNorm(input_shape=[16, conv1_out, conv1_out]),
+                                  nn.ReLU(),
+                                  nn.Conv2d(in_channels=16, out_channels=32,
+                                            kernel_size=4, stride=2),
+                                  VirtualBatchNorm(input_shape=[32, conv2_out, conv2_out]),
+                                  nn.ReLU(),
+                                  nn.Conv2d(in_channels=32, out_channels=16,
+                                            kernel_size=4, stride=2),
+                                  VirtualBatchNorm(input_shape=[16, conv3_out, conv3_out]),
+                                  nn.ReLU())
+
+        self.lin_dim = (conv3_out)**2 * 32
+
+        self.mlp = nn.Sequential(nn.Linear(in_features=self.lin_dim, out_features=256),
+                                 VirtualBatchNorm(input_shape=[256]),
+                                 nn.ReLU(),
+                                 nn.Linear(in_features=256, out_features=64),
+                                 VirtualBatchNorm(input_shape=[64]),
+                                 nn.ReLU(),
+                                 nn.Linear(in_features=64, out_features=output_shape))
+
+
+"""
+
+
 class Policy(nn.Module):
     def __init__(self, input_shape, output_shape, rng=np.random.RandomState(0)):
         super(Policy, self).__init__()
@@ -88,6 +120,7 @@ class Policy(nn.Module):
 
         def conv_output(width, kernel, stride, padding=0):
             return int((width - kernel + 2 * padding) // stride + 1)
+
         conv1_out = conv_output(input_shape[-2], 8, 4)
         conv2_out = conv_output(conv1_out, 4, 2)
         self.conv = nn.Sequential(nn.Conv2d(in_channels=input_shape[-1], out_channels=16,
@@ -136,7 +169,7 @@ class Policy(nn.Module):
         # memory_clear_mask = self.rng.choice(int(0.1 * timestep_limit), size=256)
 
         t, e = 0, 1
-        rewards, novelty_vector = 0, []
+        rewards, novelty_vector = [], []
 
         self.freeze_VBN(False)
         if self._ref_batch is None:
@@ -166,11 +199,12 @@ class Policy(nn.Module):
             # self._ref_batch = []
 
             # do rollout
+            rewards.append([])
             obs = env.reset()
-            for _ in range(timestep_limit - t):
+            while t <= timestep_limit:
                 action = int(self.forward(to_obs_tensor(obs)))
                 obs, rew, done, _ = env.step(action)
-                rewards += rew
+                rewards[-1].append(rew)
                 # self._ref_batch.append(obs)
                 # # to save some memory, try to reduce the ref batch if it gets too large
                 # if len(self._ref_batch) == 0.1 * timestep_limit:
@@ -183,29 +217,36 @@ class Policy(nn.Module):
 
                 t += 1
                 if done:
+                    rewards[-1] = np.sum(rewards[-1])
+                    print("{} in run {}: {}".format(rank, e, rewards[-1]))
                     break
+            if t == timestep_limit:
+                rewards[-1] = np.sum(rewards[-1])
+                print("{} in run {}: {}".format(rank, e, rewards[-1]))
 
         if render:
             env.close()
 
-        mean_reward = rewards / e
+        mean_reward = np.sum(rewards) / e
+        print("{} mean: {}".format(rank, mean_reward))
         # return mean_reward, novelty_vector
         return mean_reward
 
-    def play(self, env, theta=None):
+    def play(self, env, theta=None, loop=False):
         if theta is not None:
             self.set_from_flat(theta)
 
         t, rewards = 0, 0
         obs = env.reset()
         done = False
-        while not done:
+        while not done or loop:
             action = int(self.forward(to_obs_tensor(obs)))
             obs, rew, done, _ = env.step(action)
             rewards += rew
             env.render()
             t += 1
             if done:
+                obs = env.reset()
                 break
         env.close()
         print("Ended after {} game steps with reward {}.".format(t, rewards))
@@ -287,6 +328,19 @@ def get_pol():
     pol.forward(pol._ref_batch)
     pol.freeze_VBN(True)
     return env, pol
+
+
+def print_paras(pol):
+    s = []
+    total = 0
+    for seq in [pol.conv, pol.mlp]:
+        for m in seq:
+            paras = 0
+            for p in m.parameters():
+                paras += np.prod(p.shape)
+            s.append([m, paras])
+            total += paras
+    print([[t[0], t[1], t[1] / total * 100] for t in s])
 
 
 def show_ob(ob):
