@@ -218,17 +218,17 @@ class Policy(nn.Module):
                 t += 1
                 if done:
                     rewards[-1] = np.sum(rewards[-1])
-                    print("{} in run {}: {}".format(rank, e, rewards[-1]))
+                    # print("{} in run {}: {}".format(rank, e, rewards[-1]))
                     break
             if t == timestep_limit:
                 rewards[-1] = np.sum(rewards[-1])
-                print("{} in run {}: {}".format(rank, e, rewards[-1]))
+                # print("{} in run {}: {}".format(rank, e, rewards[-1]))
 
         if render:
             env.close()
 
         mean_reward = np.sum(rewards) / e
-        print("{} mean: {}".format(rank, mean_reward))
+        # print("{} mean: {}".format(rank, mean_reward))
         # return mean_reward, novelty_vector
         return mean_reward
 

@@ -35,7 +35,7 @@ def es(game, render, config, generations, step_size, seed, random_noise_size, cl
             config = json.loads(f.read())
 
     path = "save/{}-{}_{}".format(config["env_short"], str(timestamp.date()), str(timestamp.time()))
-    txt = "Log {}\n\nWith parameters: \ngame={} ({}) \nconfig={} \ngenerations={} \nstep_size={} \nseed={} \nrandom_noise_size={} \nclassic_es={} \nstochastic_activation={} \ngain={} \n".format(path, config['env_short'], config['env_id'], config, generations, step_size, seed, random_noise_size, classic_es, stochastic_activation, gain)
+    txt = "Log {}\n\nWith parameters: \ngame={} ({}) \nconfig={} \ngenerations={} \nstep_size={} \nseed={} \nrandom_noise_size={} \nclassic_es={} \nstochastic_activation={} \n(xavier) gain={} \n".format(path, config['env_short'], config['env_id'], config, generations, step_size, seed, random_noise_size, classic_es, stochastic_activation, gain)
 
     worker = ES(config, rand_num_table_size=random_noise_size, step_size=step_size, seed=seed, render=render, verbose=True, log_path=path, initial_text=txt, classic_es=classic_es, stochastic_activation=stochastic_activation, gain=gain)
     worker(generations)
@@ -46,4 +46,4 @@ if __name__ == '__main__':
     es()
 
 
-# mpievo 72 -g seaquest -gens 500 -rn 1000000000 -c --gain 2.0 -sig 1.5 --seed 101
+# mpievo 72 -g seaquest -gens 300 -rn 1000000000 -c --gain 1.0 -sig 1.0 --seed 123
