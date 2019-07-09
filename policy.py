@@ -124,17 +124,17 @@ class Policy(nn.Module):
         conv1_out = conv_output(input_shape[-2], 8, 4)
         conv2_out = conv_output(conv1_out, 4, 2)
         self.conv = nn.Sequential(nn.Conv2d(in_channels=input_shape[-1], out_channels=16,
-                                            kernel_size=8, stride=4),
+                                            kernel_size=8, stride=4, bias=False),
                                   VirtualBatchNorm(input_shape=[16, conv1_out, conv1_out]),
                                   nn.ReLU(),
                                   nn.Conv2d(in_channels=16, out_channels=32,
-                                            kernel_size=4, stride=2),
+                                            kernel_size=4, stride=2, bias=False),
                                   VirtualBatchNorm(input_shape=[32, conv2_out, conv2_out]),
                                   nn.ReLU())
 
         self.lin_dim = (conv2_out)**2 * 32
 
-        self.mlp = nn.Sequential(nn.Linear(in_features=self.lin_dim, out_features=256),
+        self.mlp = nn.Sequential(nn.Linear(in_features=self.lin_dim, out_features=256, bias=False),
                                  VirtualBatchNorm(input_shape=[256]),
                                  nn.ReLU(),
                                  nn.Linear(in_features=256, out_features=output_shape))
