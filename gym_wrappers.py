@@ -8,7 +8,7 @@ def wrap_env(env, episode_life=False, fire_reset=True):
     env = MaxAndSkipEnv(env, 4)
     if fire_reset:
         env = FireResetEnv(env)
-    env = WarpFrame(env)
+    env = WarpFrame(env)  # , width=84, height=84)
     env = FrameStack(env, 4)
     env = ScaledFloatFrame(env)
     return env

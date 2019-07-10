@@ -37,10 +37,10 @@ class ES:
     parameter space and the table space. Worst case is small table with large
     slice and many parameters.
     max_table_step is the maximum stride that an iterator will take over the
-    table. 
-    max_param_step is the maximum stride that an iterator will take over the 
-    parameters, when drawing a random subset for permutation. A larger step will 
-    help wash out correlations in randomness. However,if the step is too large 
+    table.
+    max_param_step is the maximum stride that an iterator will take over the
+    parameters, when drawing a random subset for permutation. A larger step will
+    help wash out correlations in randomness. However,if the step is too large
     you risk overlapping old values as it wraps around the arrays.
     WARNING: If the # mutations approaches # parameters, make sure that the
     max_param_step == 1, else overlapping will cause actual # mutations to be
@@ -75,8 +75,9 @@ class ES:
         if self._size > 1:
             assert self._size % 2 == 0
 
+        self._path = kwargs.get("log_path", "No_path_specified")
         if self._rank == 0:
-            self.log = open(kwargs.get("log_path", "No_path_specified") + ".log", 'w+')
+            self.log = open(self._path + ".log", 'w+')
             log(self, kwargs.get("initial_text", "\n"))
 
         self._global_seed = kwargs.get('seed', 123)
@@ -88,7 +89,7 @@ class ES:
         # the even ranked workers will perturb positively, the odd ones negatively
         self._seed_set = [s for ss in [[s, s] for s in self._seed_set] for s in ss]
         self._worker_rngs = [np.random.RandomState(seed) for seed in self._seed_set]
-        #self._par_choices = np.arange(0, self._num_parameters, dtype=np.int32)
+        # self._par_choices = np.arange(0, self._num_parameters, dtype=np.int32)
         self._generation_number = 0
         self._score_history = []
 
@@ -97,9 +98,12 @@ class ES:
         self.exp = exp
         self.env = get_env_from(exp)
         self.policy = Policy(self.env.observation_space.shape, self.env.action_space.n, self._worker_rngs[self._rank])
-        self.policy.stochastic_activation = kwargs.get('stochastic_activation', False)
+        self._stochastic_activation = kwargs.get('stochastic_activation', False)
+        self.policy.stochastic_activation = self._stochastic_activation
         self.policy.gain = kwargs.get('gain', 1.0)
+        self.policy.optimize = 'all_except_first_linear'
         self._theta = self.policy.get_flat()
+        log(self, "Optimizing {} parameters.".format(int(self._theta.size)))
         self.optimizer = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](self._theta, **exp['optimizer']['args'])
         self._update_ratios = []
 
@@ -107,9 +111,8 @@ class ES:
         self.objective = self.policy.rollout
         timestep_limit = exp['config']['timestep_limit']  # kwargs.get('timestep_limit', 10000)
         max_runs = exp['config']['max_runs_per_eval']  # kwargs.get('max_runs_per_eval', 5)
-        novelty = kwargs.get('use_novelty', False)
         render = kwargs.get('render', False) if self._rank == 0 else False
-        self.obj_kwargs = {'env': self.env, 'timestep_limit': timestep_limit, 'max_runs': max_runs, 'novelty': novelty, 'rank': self._rank, 'render': render}
+        self.obj_kwargs = {'env': self.env, 'timestep_limit': timestep_limit, 'max_runs': max_runs, 'rank': self._rank, 'render': render}
         self._sigma = np.float32(kwargs.get('sigma', 1.0))  # this is the noise_stdev parameter from Uber json-configs
         self._num_parameters = len(self._theta)
         self._num_mutations = kwargs.get('num_mutations', self._num_parameters)  # limited perturbartion ES as in Zhang et al 2017, ch.4.1
@@ -168,7 +171,8 @@ class ES:
 
         state = {"exp": self.exp,
                  "obj_kwargs": self.obj_kwargs,
-                 "policy": self.policy,
+                 # "policy": self.policy,
+                 "_stochastic_activation": self._stochastic_activation,
                  "optimizer": self.optimizer,
                  "_OpenAIES": self._OpenAIES,
                  "_update_ratios": self._update_ratios,
@@ -199,7 +203,7 @@ class ES:
             setattr(self, key, state[key])
 
         # Reconstruct larger structures and load MPI
-        #self._par_choices = np.arange(0, self._num_parameters, dtype=np.int32)
+        # self._par_choices = np.arange(0, self._num_parameters, dtype=np.int32)
         self._old_theta = self._theta.copy()
         from mpi4py import MPI
         self._MPI = MPI
@@ -207,8 +211,12 @@ class ES:
         self._size = self._comm.Get_size()
         self._rank = self._comm.Get_rank()
         torch.manual_seed(self._global_seed)
-        self.objective = self.policy.rollout
+
         self.env = get_env_from(self.exp)
+        self.policy = Policy(self.env.observation_space.shape, self.env.action_space.n, self._worker_rngs[self._rank])
+        self.policy.stochastic_activation = self._stochastic_activation
+        self.objective = self.policy.rollout
+        self.policy.set_from_flat(self._running_best)
 
         nbytes = self._rand_num_table_size * MPI.FLOAT.Get_size() if self._rank == 0 else 0
         win = MPI.Win.Allocate_shared(nbytes, MPI.FLOAT.Get_size(), comm=self._comm)
@@ -287,12 +295,12 @@ class ES:
         if self._rank == 0:
             t = time.time()
             local_rew = np.empty(1, dtype=np.float32)
-            local_rew[0] = objective(self._theta)
+            local_rew[0], roll_obs = objective(self._theta, curr_best=self._running_best_reward)
             tt = time.time() - t
             gt = time.time()
         else:
             local_rew = np.empty(1, dtype=np.float32)
-            local_rew[0] = objective(self._theta)
+            local_rew[0], roll_obs = objective(self._theta, curr_best=self._running_best_reward)
 
         # Consolidate return values
         all_rewards = np.empty(self._size, dtype=np.float32)
@@ -300,6 +308,19 @@ class ES:
         self._comm.Allgather([local_rew, self._MPI.FLOAT],
                              [all_rewards, self._MPI.FLOAT])
         self._update_log(all_rewards)
+
+        # save video of new best run
+        if self._rank == np.argmax(all_rewards) and np.max(all_rewards) >= self._running_best_reward:
+            import imageio
+            import warnings
+            from skimage import img_as_ubyte
+            path = 'save/{}-gen{}-rank{}-rew{:.2f}.mp4'.format(self._path.split('save/', 1)[1], self._generation_number, self._rank, local_rew[0])
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                imageio.mimwrite(path, img_as_ubyte(np.array(roll_obs)), fps=30)
+            print('## saved video to', path)
+
+        # update theta and log generation results
         if self._rank == 0:
             gt = time.time() - gt
             t = time.time()
@@ -326,12 +347,12 @@ class ES:
                 if parent_num == 0:
                     assert all_rewards[rank] == np.max(all_rewards)
                 # Begin Update sequence for the running best if applicable
-                if (parent_num == 0) and (all_rewards[rank] >= self._running_best_reward):
+                if parent_num == 0 and all_rewards[rank] >= self._running_best_reward:
                     self._update_best_flag = True
                     self._running_best_reward = all_rewards[rank]
                     log(self, "## New running best: {:.2f} ##".format(self._running_best_reward))
                     # Since the best is always first, copy centroid (theta) elements
-                    self._running_best[:] = self._old_theta  # unperturbed theta
+                    self._running_best[:] = self._old_theta.copy()  # unperturbed theta
 
                 if rank == self._rank:
                     dimension_slices = local_dim_slices
@@ -342,9 +363,10 @@ class ES:
                     dimension_slices, perturbation_slices = match_slices(master_dim_slices, perturbation_slices)
 
                 # Apply update running best for non-self ranks
-                if (parent_num == 0) and self._update_best_flag:
+                if parent_num == 0 and self._update_best_flag:
                     multi_slice_add(self._running_best, self._rand_num_table,
                                     dimension_slices, perturbation_slices, rank % 2 == 0)
+                    self._update_best_flag = False
 
                 # first divide the gradient with weight w, then add perturbation and multiply with w
                 # again, such that only this perturbation is weighted in the end, supposedly faster
@@ -375,8 +397,12 @@ class ES:
 
     @property
     def best(self):
-
         return self._running_best.copy()
+
+    def showcase(self):
+        print("Showcasing running best of: {:.2f}".format(self._running_best_reward))
+        self.policy.play(self.env, theta=self._running_best.copy(), loop=True)
+        print("Running best was: {:.2f}".format(self._running_best_reward))
 
     def plot_reward_over_time(self, prefix='test', logy=True, savefile=False):
         """

@@ -110,13 +110,11 @@ class Policy(nn.Module):
     def __init__(self, input_shape, output_shape, rng=np.random.RandomState(0)):
         super(Policy, self).__init__()
 
-        # self.env = env
         self.rng = rng
         self._ref_batch = None
         self.stochastic_activation = True
         self.gain = 1.0
-        # input_shape = self.env.observation_space.shape
-        # output_shape = self.env.action_space.n
+        self.optimize = 'last_layer'  # 'last_layer', 'all_except_first_linear', 'all'
 
         def conv_output(width, kernel, stride, padding=0):
             return int((width - kernel + 2 * padding) // stride + 1)
@@ -160,7 +158,7 @@ class Policy(nn.Module):
         else:
             return torch.argmax(x, dim=1)
 
-    def rollout(self, theta, env, timestep_limit, max_runs=5, novelty=False, rank=None, render=False):
+    def rollout(self, theta, env, timestep_limit, max_runs=5, rank=None, render=False, curr_best=None):
         """
         rollout of the policy in the given env for no more than max_runs and no more than timestep_limit steps
         """
@@ -169,7 +167,9 @@ class Policy(nn.Module):
         # memory_clear_mask = self.rng.choice(int(0.1 * timestep_limit), size=256)
 
         t, e = 0, 1
-        rewards, novelty_vector = [], []
+        rewards = []
+
+        roll_obs = []
 
         self.freeze_VBN(False)
         if self._ref_batch is None:
@@ -183,20 +183,6 @@ class Policy(nn.Module):
             if t == 0:
                 e = 0  # only start with 0 here to avoid issue in condition check for first loop
             e += 1
-            # print("{}, run {}, timestep {}".format(rank, e, t))
-
-            # initialise or update virtual batch normalization
-            # self.freeze_VBN(False)
-            # if self._ref_batch is None:
-            #     self._ref_batch = get_ref_batch(env)
-            # else:  # suppose you have a list from the last run
-            #     # I figured it is faster to choose out of all obs of the last run,
-            #     # instead of flipping a coin after every observation
-            #     self._ref_batch = np.array(self._ref_batch)[self.rng.choice(int(len(self._ref_batch)), 64)]
-            #     self._ref_batch = torch.tensor(self._ref_batch.transpose(0, 3, 1, 2))
-            # self.forward(self._ref_batch)
-            # self.freeze_VBN(True)
-            # self._ref_batch = []
 
             # do rollout
             rewards.append([])
@@ -205,49 +191,48 @@ class Policy(nn.Module):
                 action = int(self.forward(to_obs_tensor(obs)))
                 obs, rew, done, _ = env.step(action)
                 rewards[-1].append(rew)
-                # self._ref_batch.append(obs)
-                # # to save some memory, try to reduce the ref batch if it gets too large
-                # if len(self._ref_batch) == 0.1 * timestep_limit:
-                #     self._ref_batch = list(np.array(self._ref_batch)[memory_clear_mask])
-                if novelty:
-                    novelty_vector.append(env.unwrapped._get_ram())
+
+                if curr_best:
+                    roll_obs.append(obs)
                 if render:
-                    # print(action)
                     env.render()
 
                 t += 1
                 if done:
-                    # print("{} in run {}: {}".format(rank, e, rewards[-1]))
                     break
 
         if render:
             env.close()
 
         rewards = [np.sum(rews) for rews in rewards]
-        mean_reward = np.sum(rewards) / e
-        # print("{} mean: {}".format(rank, mean_reward))
-        # return mean_reward, novelty_vector
-        return mean_reward
+        mean_reward = np.mean(rewards)
+        return mean_reward, roll_obs
 
     def play(self, env, theta=None, loop=False):
         if theta is not None:
             self.set_from_flat(theta)
+        self.eval()
 
         t, rewards = 0, 0
+        all_rews = []
         obs = env.reset()
         done = False
-        while not done or loop:
-            action = int(self.forward(to_obs_tensor(obs)))
-            obs, rew, done, _ = env.step(action)
-            rewards += rew
-            env.render()
-            t += 1
-            if done:
-                print("Died after {} game steps with reward {}.".format(t, rewards))
-                t, rewards = 0, 0
-                obs = env.reset()
-                # break
-        env.close()
+        try:
+            while not done or loop:
+                action = int(self.forward(to_obs_tensor(obs)))
+                obs, rew, done, _ = env.step(action)
+                rewards += rew
+                env.render()
+                t += 1
+                if done:
+                    all_rews.append(rewards)
+                    print("Died after {} game steps with reward {}.".format(t, rewards))
+                    t, rewards = 0, 0
+                    obs = env.reset()
+            env.close()
+        except KeyboardInterrupt:
+            env.close()
+            print("Game stopped by user, total mean reward after {} runs: {:.2f}".format(len(all_rews), np.mean(all_rews)))
 
     def freeze_VBN(self, freeze):
         for m in self.modules():
@@ -280,29 +265,49 @@ class Policy(nn.Module):
         operations might be avoided.
         """
         flat_parameters = []
-        # for m in self.modules():
-        #     if not isinstance(m, Policy) and not isinstance(m, nn.Sequential):
-        #         for p in m.parameters():
-        #             flat_parameters.append(p.data.view(-1))
-
-        for p in self.mlp[3].parameters():
-            flat_parameters.append(p.data.view(-1))
+        if self.optimize == 'all':
+            for m in self.modules():
+                if not isinstance(m, Policy) and not isinstance(m, nn.Sequential):
+                    for p in m.parameters():
+                        flat_parameters.append(p.data.view(-1))
+        elif self.optimize == 'all_except_first_linear':
+            for m in self.conv:
+                for p in m.parameters():
+                    flat_parameters.append(p.data.view(-1))
+            for m in self.mlp[1:]:
+                for p in m.parameters():
+                    flat_parameters.append(p.data.view(-1))
+        elif self.optimize == 'last_layer':
+            for p in self.mlp[3].parameters():
+                flat_parameters.append(p.data.view(-1))
 
         return np.concatenate(flat_parameters)
 
     def set_from_flat(self, flat_parameters):
         start = 0
-        # for m in self.modules():
-        #     if not isinstance(m, Policy) and not isinstance(m, nn.Sequential):
-        #         for p in m.parameters():
-        #             size = np.prod(p.data.shape)
-        #             p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
-        #             start += size
-
-        for p in self.mlp[3].parameters():
-            size = np.prod(p.data.shape)
-            p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
-            start += size
+        if self.optimize == 'all':
+            for m in self.modules():
+                if not isinstance(m, Policy) and not isinstance(m, nn.Sequential):
+                    for p in m.parameters():
+                        size = np.prod(p.data.shape)
+                        p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
+                        start += size
+        elif self.optimize == 'all_except_first_linear':
+            for m in self.conv:
+                for p in m.parameters():
+                    size = np.prod(p.data.shape)
+                    p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
+                    start += size
+            for m in self.mlp[1:]:
+                for p in m.parameters():
+                    size = np.prod(p.data.shape)
+                    p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
+                    start += size
+        elif self.optimize == 'last_layer':
+            for p in self.mlp[3].parameters():
+                size = np.prod(p.data.shape)
+                p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
+                start += size
 
     def set_ref_batch(self, ref_batch):
         self.ref_list = []
