@@ -243,10 +243,11 @@ class Policy(nn.Module):
             env.render()
             t += 1
             if done:
+                print("Died after {} game steps with reward {}.".format(t, rewards))
+                t, rewards = 0, 0
                 obs = env.reset()
-                break
+                # break
         env.close()
-        print("Ended after {} game steps with reward {}.".format(t, rewards))
 
     def freeze_VBN(self, freeze):
         for m in self.modules():
@@ -262,11 +263,13 @@ class Policy(nn.Module):
         if isinstance(m, nn.Linear):
             # nn.init.normal_(m.weight.data, mean=0, std=0.01)
             nn.init.xavier_uniform_(m.weight.data, gain=self.gain)
-            nn.init.constant_(m.bias.data, 0)
+            if m.bias is not None:
+                nn.init.constant_(m.bias.data, 0)
         elif isinstance(m, nn.Conv2d):
             # nn.init.normal_(m.weight.data, mean=0, std=0.01)
             nn.init.xavier_normal_(m.weight.data, gain=self.gain)
-            nn.init.constant_(m.bias.data, 0)
+            if m.bias is not None:
+                nn.init.constant_(m.bias.data, 0)
 
     def get_flat(self):
         """

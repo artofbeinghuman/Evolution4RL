@@ -55,7 +55,7 @@ class ES:
         """
         :param xo: initial centroid
         kwargs:
-        :param step_size (optional): step size to use for mutation (fixed and uniform variance of mutation)
+        :param sigma (optional): noise/perturbation variance to use for mutation (fixed and uniform variance of mutation), i.e. mutation strength
         :param num_mutations (optional): number of dims to mutate in each iter (defaults to #dim)
         :param seed (optional): global seed for all workers
         :param rand_num_table_size (optional): size of the random number table
@@ -110,7 +110,7 @@ class ES:
         novelty = kwargs.get('use_novelty', False)
         render = kwargs.get('render', False) if self._rank == 0 else False
         self.obj_kwargs = {'env': self.env, 'timestep_limit': timestep_limit, 'max_runs': max_runs, 'novelty': novelty, 'rank': self._rank, 'render': render}
-        self._step_size = np.float32(kwargs.get('step_size', 1.0))  # this is the noise_stdev parameter from Uber json-configs
+        self._sigma = np.float32(kwargs.get('sigma', 1.0))  # this is the noise_stdev parameter from Uber json-configs
         self._num_parameters = len(self._theta)
         self._num_mutations = kwargs.get('num_mutations', self._num_parameters)  # limited perturbartion ES as in Zhang et al 2017, ch.4.1
         self._OpenAIES = not kwargs.get('classic_es', True)
@@ -125,7 +125,7 @@ class ES:
             self._weights -= 0.5
             self._weights[self._num_parents // 2] = 0.001  # to avoid divide by zero
             # multiply 1/sigma factor directly at this point,
-            self._weights /= np.array([self._step_size], dtype=np.float32)
+            self._weights /= np.array([self._sigma], dtype=np.float32)
             self._weights.astype(np.float32, copy=False)
         else:
             # Classics ES:
@@ -156,7 +156,7 @@ class ES:
             self._rand_num_table[:] = self._global_rng.randn(self._rand_num_table_size)
             log(self, "Calculated Random Table in {}s.".format(time.time() - t))
             # Fold step-size into noise
-            self._rand_num_table *= self._step_size
+            self._rand_num_table *= self._sigma
 
         self._max_table_step = kwargs.get("max_table_step", 5)
         self._max_param_step = kwargs.get("max_param_step", 1)
@@ -173,7 +173,7 @@ class ES:
                  "optimizer": self.optimizer,
                  "_OpenAIES": self._OpenAIES,
                  "_update_ratios": self._update_ratios,
-                 "_step_size": self._step_size,
+                 "_sigma": self._sigma,
                  "_num_parameters": self._num_parameters,
                  "_num_mutations": self._num_mutations,
                  "_num_parents": self._num_parents,
@@ -222,7 +222,7 @@ class ES:
                 self._rand_num_table[:] = self._global_rng.randn(self._rand_num_table_size)
                 log(self, "Calculated Random Table in {}s".format(time.time() - t))
                 # Fold step-size into table values
-                self._rand_num_table *= self._step_size
+                self._rand_num_table *= self._sigma
 
         self._comm.Barrier()
 
@@ -235,15 +235,19 @@ class ES:
         tt = time.time()
         partial_objective = partial(self.objective, **self.obj_kwargs)
         for i in range(num_generations):
-            # if num_generations == 30:
-            #     self._weights *= np.array([self._step_size], dtype=np.float32)
-            #     self._step_size *= 0.5
-            #     self._weights /= np.array([self._num_parents * self._step_size])
             self._generation_number += 1
+            # if len(self._score_history) >= 10:
+            #     if num_generations % 20 == 0:
+            #         self._weights *= np.array([self._sigma], dtype=np.float32)
+            #         self._rand_num_table *= np.array([self._sigma], dtype=np.float32)
+            #         if
+            #         self._sigma *= 0.5
+            #         self._weights /= np.array([self._num_parents * self._sigma])
             self._update(partial_objective)
             log(self, "Gen {} took {}s.".format(self._generation_number, time.time() - t))
             t = time.time()
-        log(self, "\nFinished run in " + get_hms_string(time.time() - tt) + ".\n")
+            assert self.env.game_mode is not None
+        log(self, "\nFinished run in " + get_hms_string(time.time() - tt) + " with total best {:.2f}.\n".format(self._running_best_reward))
         if self._rank == 0:
             self.log.close()
 
@@ -434,6 +438,7 @@ class ES:
         if self._rank == 0:
             pickled_obj_file = open(filename, 'wb')
             # pickle.dump(self, pickled_obj_file, 2)
+            self.env.game_mode = 0 if self.env.game_mode is None else self.env.game_mode
             torch.save(self, pickled_obj_file)
             pickled_obj_file.close()
             print("Saved to", filename)
