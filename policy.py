@@ -314,6 +314,15 @@ class Policy(nn.Module):
         self.ref_list.append(ref_batch)
 
     @property
+    def parameters(self):
+        n = 0
+        for m in self.modules():
+            if not isinstance(m, Policy) and not isinstance(m, nn.Sequential):
+                for p in m.parameters():
+                    n += np.prod(p.data.size())
+        return n
+
+    @property
     def needs_ref_batch(self):
         return True
 

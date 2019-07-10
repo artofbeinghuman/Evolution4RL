@@ -101,9 +101,9 @@ class ES:
         self._stochastic_activation = kwargs.get('stochastic_activation', False)
         self.policy.stochastic_activation = self._stochastic_activation
         self.policy.gain = kwargs.get('gain', 1.0)
-        self.policy.optimize = 'all_except_first_linear'
+        # self.policy.optimize = 'all_except_first_linear'
         self._theta = self.policy.get_flat()
-        log(self, "Optimizing {} parameters.".format(int(self._theta.size)))
+        log(self, "Optimizing {} out of {} network parameters ({:.2f}%).".format(int(self._theta.size), self.policy.parameters, 100 * int(self._theta.size) / self.policy.parameters))
         self.optimizer = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](self._theta, **exp['optimizer']['args'])
         self._update_ratios = []
 
