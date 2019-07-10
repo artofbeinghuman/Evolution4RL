@@ -167,7 +167,6 @@ class ES:
     def __getstate__(self):
 
         state = {"exp": self.exp,
-                 "env": self.env,
                  "obj_kwargs": self.obj_kwargs,
                  "policy": self.policy,
                  "optimizer": self.optimizer,
@@ -209,6 +208,7 @@ class ES:
         self._rank = self._comm.Get_rank()
         torch.manual_seed(self._global_seed)
         self.objective = self.policy.rollout
+        self.env = get_env_from(self.exp)
 
         nbytes = self._rand_num_table_size * MPI.FLOAT.Get_size() if self._rank == 0 else 0
         win = MPI.Win.Allocate_shared(nbytes, MPI.FLOAT.Get_size(), comm=self._comm)
@@ -246,7 +246,6 @@ class ES:
             self._update(partial_objective)
             log(self, "Gen {} took {}s.".format(self._generation_number, time.time() - t))
             t = time.time()
-            assert self.env.game_mode is not None
         log(self, "\nFinished run in " + get_hms_string(time.time() - tt) + " with total best {:.2f}.\n".format(self._running_best_reward))
         if self._rank == 0:
             self.log.close()
@@ -438,7 +437,6 @@ class ES:
         if self._rank == 0:
             pickled_obj_file = open(filename, 'wb')
             # pickle.dump(self, pickled_obj_file, 2)
-            self.env.game_mode = 0 if self.env.game_mode is None else self.env.game_mode
             torch.save(self, pickled_obj_file)
             pickled_obj_file.close()
             print("Saved to", filename)
