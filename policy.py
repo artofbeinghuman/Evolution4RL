@@ -211,6 +211,12 @@ class Policy(nn.Module):
     def play(self, env, theta=None, loop=False):
         if theta is not None:
             self.set_from_flat(theta)
+            self.freeze_VBN(False)
+            if self._ref_batch is None:
+                self._ref_batch = get_ref_batch(env, batch_size=512, p=0.2)
+                self.forward(self._ref_batch)
+            self.freeze_VBN(True)
+
         self.eval()
 
         t, rewards = 0, 0
