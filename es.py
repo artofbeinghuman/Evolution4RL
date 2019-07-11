@@ -113,7 +113,7 @@ class ES:
         max_runs = exp['config']['max_runs_per_eval']  # kwargs.get('max_runs_per_eval', 5)
         render = kwargs.get('render', False) if self._rank == 0 else False
         self.obj_kwargs = {'env': self.env, 'timestep_limit': timestep_limit, 'max_runs': max_runs, 'rank': self._rank, 'render': render}
-        self._sigma = np.float32(kwargs.get('sigma', 1.0))  # this is the noise_stdev parameter from Uber json-configs
+        self._sigma = np.float32(kwargs.get('sigma', 0.05))  # this is the noise_stdev parameter from Uber json-configs
         self._num_parameters = len(self._theta)
         self._num_mutations = kwargs.get('num_mutations', self._num_parameters)  # limited perturbartion ES as in Zhang et al 2017, ch.4.1
         self._OpenAIES = not kwargs.get('classic_es', True)
@@ -244,13 +244,12 @@ class ES:
         partial_objective = partial(self.objective, **self.obj_kwargs)
         for i in range(num_generations):
             self._generation_number += 1
-            # if len(self._score_history) >= 10:
-            #     if num_generations % 20 == 0:
-            #         self._weights *= np.array([self._sigma], dtype=np.float32)
-            #         self._rand_num_table *= np.array([self._sigma], dtype=np.float32)
-            #         if
-            #         self._sigma *= 0.5
-            #         self._weights /= np.array([self._num_parents * self._sigma])
+            # if num_generations % 200 == 0 and num_generations > 0:
+            #     self._weights *= np.array([self._sigma], dtype=np.float32)
+            #     self._rand_num_table /= np.array([self._sigma], dtype=np.float32)
+            #     self._sigma /= np.sqrt(10)
+            #     self._weights /= np.array([self._sigma], dtype=np.float32)
+            #     self._rand_num_table *= self._sigma
             self._update(partial_objective)
             log(self, "Gen {} took {}s.".format(self._generation_number, time.time() - t))
             t = time.time()
