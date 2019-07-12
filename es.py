@@ -18,6 +18,15 @@ def log(es, msg):
             print(msg)
 
 
+def save_video(obs, path):
+    import imageio
+    import warnings
+    from skimage import img_as_ubyte
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        imageio.mimwrite(path, img_as_ubyte(np.array(obs)), fps=30)
+
+
 class ES:
     """
     Runs a basic distributed Evolutionary strategy using MPI. The centroid
@@ -75,10 +84,13 @@ class ES:
         if self._size > 1:
             assert self._size % 2 == 0
 
-        self._path = kwargs.get("log_path", "No_path_specified")
         if self._rank == 0:
+            self._path = kwargs.get("log_path", "No_path_specified")
             self.log = open(self._path + ".log", 'w+')
             log(self, kwargs.get("initial_text", "\n"))
+        else:
+            self._path = ""
+        self._comm.bcast(self._path, root=0)
 
         self._global_seed = kwargs.get('seed', 123)
         torch.manual_seed(self._global_seed)
@@ -98,14 +110,13 @@ class ES:
         self.exp = exp
         self.env = get_env_from(exp)
         if self._rank == 0:
-            self._ref_batch = get_ref_batch(self.env, batch_size=2**10, p=0.1)
+            self._ref_batch = get_ref_batch(self.env, batch_size=2**9, p=0.2)
         else:
-            self._ref_batch = torch.empty([2**10, 4, 84, 84])
+            self._ref_batch = torch.empty([2**9, 4, 84, 84])
         self._comm.bcast(self._ref_batch, root=0)
         self.policy = Policy(self.env.observation_space.shape, self.env.action_space.n, self._ref_batch)
         self._stochastic_activation = kwargs.get('stochastic_activation', False)
         self.policy.stochastic_activation = self._stochastic_activation
-        self.policy.gain = kwargs.get('gain', 1.0)
         # self.policy.optimize = 'all_except_first_linear'
         self._theta = self.policy.get_flat()
         log(self, "Optimizing {} out of {} network parameters ({:.2f}%).".format(int(self._theta.size), self.policy.parameters, 100 * int(self._theta.size) / self.policy.parameters))
@@ -177,6 +188,7 @@ class ES:
         state = {"exp": self.exp,
                  "obj_kwargs": self.obj_kwargs,
                  "_ref_batch": self._ref_batch,
+                 "_path": self._path,
                  "_stochastic_activation": self._stochastic_activation,
                  "optimizer": self.optimizer,
                  "_OpenAIES": self._OpenAIES,
@@ -261,6 +273,7 @@ class ES:
         log(self, "\nFinished run in " + get_hms_string(time.time() - tt) + " with total best {:.2f}.\n".format(self._running_best_reward))
         if self._rank == 0:
             self.log.close()
+            self.showcase(save=True)
 
     def _draw_random_table_slices(self, rng):
         """
@@ -315,14 +328,9 @@ class ES:
 
         # save video of new best run
         if self._rank == np.argmax(all_rewards) and np.max(all_rewards) >= self._running_best_reward:
-            import imageio
-            import warnings
-            from skimage import img_as_ubyte
             path = 'save/{}-gen{}-rank{}-rew{:.2f}.mp4'.format(self._path.split('save/', 1)[1], self._generation_number, self._rank, local_rew[0])
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                imageio.mimwrite(path, img_as_ubyte(np.array(roll_obs)), fps=30)
-            print('## saved video to', path)
+            # save_video(roll_obs, path)
+            # log(self, '## saved video to', path)
 
         # update theta and log generation results
         if self._rank == 0:
@@ -403,9 +411,13 @@ class ES:
     def best(self):
         return self._running_best.copy()
 
-    def showcase(self):
+    def showcase(self, save=False):
         print("Showcasing running best of: {:.2f}".format(self._running_best_reward))
-        self.policy.play(self.env, theta=self._running_best.copy(), loop=True)
+        obs = self.policy.play(self.env, theta=self._running_best.copy(), loop=True, save=save)
+        if save:
+            path = '{}.showcase.mp4'.format(self._path)
+            save_video(obs, path)
+            log(self, '## saved showcase to', path)
         print("Running best was: {:.2f}".format(self._running_best_reward))
 
     def plot_reward_over_time(self, prefix='test', logy=True, savefile=False):

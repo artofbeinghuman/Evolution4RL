@@ -201,7 +201,7 @@ class Policy(nn.Module):
         mean_reward = np.mean(rewards)
         return mean_reward, roll_obs
 
-    def play(self, env, theta=None, loop=False):
+    def play(self, env, theta=None, loop=False, save=False):
         if theta is not None:
             self.set_from_flat(theta)
 
@@ -209,24 +209,43 @@ class Policy(nn.Module):
 
         t, rewards = 0, 0
         all_rews = []
+        all_obs = []
         obs = env.reset()
         done = False
-        try:
-            while not done or loop:
-                action = int(self.forward(to_obs_tensor(obs)))
-                obs, rew, done, _ = env.step(action)
-                rewards += rew
-                env.render()
-                t += 1
-                if done:
-                    all_rews.append(rewards)
-                    print("Died after {} game steps with reward {}.".format(t, rewards))
-                    t, rewards = 0, 0
-                    obs = env.reset()
-            env.close()
-        except KeyboardInterrupt:
-            env.close()
-            print("Game stopped by user, total mean reward after {} runs: {:.2f}".format(len(all_rews), np.mean(all_rews)))
+        if save:
+            print("Running Showcase:")
+            for _ in range(5):
+                while True:
+                    action = int(self.forward(to_obs_tensor(obs)))
+                    obs, rew, done, _ = env.step(action)
+                    rewards += rew
+                    env.render()
+                    all_obs.append(obs)
+                    t += 1
+                    if done:
+                        all_rews.append(rewards)
+                        print("Died after {} game steps with reward {}.".format(t, rewards))
+                        t, rewards = 0, 0
+                        obs = env.reset()
+                        break
+        else:
+            try:
+                while not done or loop:
+                    action = int(self.forward(to_obs_tensor(obs)))
+                    obs, rew, done, _ = env.step(action)
+                    rewards += rew
+                    env.render()
+                    t += 1
+                    if done:
+                        all_rews.append(rewards)
+                        print("Died after {} game steps with reward {}.".format(t, rewards))
+                        t, rewards = 0, 0
+                        obs = env.reset()
+                env.close()
+            except KeyboardInterrupt:
+                env.close()
+                print("Game stopped by user, total mean reward after {} runs: {:.2f}".format(len(all_rews), np.mean(all_rews)))
+        return all_obs
 
     def initialise_parameters(self, m):
         """
