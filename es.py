@@ -188,6 +188,7 @@ class ES:
         state = {"exp": self.exp,
                  "obj_kwargs": self.obj_kwargs,
                  "_ref_batch": self._ref_batch,
+                 "policy": self.policy,
                  "_path": self._path,
                  "_stochastic_activation": self._stochastic_activation,
                  "optimizer": self.optimizer,
@@ -230,10 +231,10 @@ class ES:
         torch.manual_seed(self._global_seed)
 
         self.env = get_env_from(self.exp)
-        self.policy = Policy(self.env.observation_space.shape, self.env.action_space.n, self._ref_batch)
-        self.policy.stochastic_activation = self._stochastic_activation
+        # self.policy = Policy(self.env.observation_space.shape, self.env.action_space.n, self._ref_batch)
+        # self.policy.stochastic_activation = self._stochastic_activation
+        # self.policy.set_from_flat(self._running_best)
         self.objective = self.policy.rollout
-        self.policy.set_from_flat(self._running_best)
 
         nbytes = self._rand_num_table_size * MPI.FLOAT.Get_size() if self._rank == 0 else 0
         win = MPI.Win.Allocate_shared(nbytes, MPI.FLOAT.Get_size(), comm=self._comm)
@@ -272,8 +273,8 @@ class ES:
             t = time.time()
         log(self, "\nFinished run in " + get_hms_string(time.time() - tt) + " with total best {:.2f}.\n".format(self._running_best_reward))
         if self._rank == 0:
-            self.log.close()
             self.showcase(save=True)
+            self.log.close()
 
     def _draw_random_table_slices(self, rng):
         """
@@ -327,10 +328,10 @@ class ES:
         self._update_log(all_rewards)
 
         # save video of new best run
-        if self._rank == np.argmax(all_rewards) and np.max(all_rewards) >= self._running_best_reward:
-            path = 'save/{}-gen{}-rank{}-rew{:.2f}.mp4'.format(self._path.split('save/', 1)[1], self._generation_number, self._rank, local_rew[0])
-            # save_video(roll_obs, path)
-            # log(self, '## saved video to', path)
+        # if self._rank == np.argmax(all_rewards) and np.max(all_rewards) >= self._running_best_reward:
+        #     path = 'save/{}-gen{}-rank{}-rew{:.2f}.mp4'.format(self._path.split('save/', 1)[1], self._generation_number, self._rank, local_rew[0])
+        #     save_video(roll_obs, path)
+        #     log(self, '## saved video to {}'.format(path))
 
         # update theta and log generation results
         if self._rank == 0:
@@ -417,7 +418,7 @@ class ES:
         if save:
             path = '{}.showcase.mp4'.format(self._path)
             save_video(obs, path)
-            log(self, '## saved showcase to', path)
+            log(self, '## saved showcase to {}'.format(path))
         print("Running best was: {:.2f}".format(self._running_best_reward))
 
     def plot_reward_over_time(self, prefix='test', logy=True, savefile=False):

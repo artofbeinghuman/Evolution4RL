@@ -219,7 +219,6 @@ class Policy(nn.Module):
                     action = int(self.forward(to_obs_tensor(obs)))
                     obs, rew, done, _ = env.step(action)
                     rewards += rew
-                    env.render()
                     all_obs.append(obs)
                     t += 1
                     if done:
