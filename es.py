@@ -1,7 +1,7 @@
 import numpy as np
 from functools import partial
 import torch
-from policy import Policy
+from policy import Policy, get_ref_batch
 from optimizers import SGD, Adam
 import time
 from evo_utils import *
@@ -97,7 +97,12 @@ class ES:
         # (parameters should be initialised randomly via global rng, such that all workers start with identical centroid)
         self.exp = exp
         self.env = get_env_from(exp)
-        self.policy = Policy(self.env.observation_space.shape, self.env.action_space.n, self._worker_rngs[self._rank])
+        if self._rank == 0:
+            self._ref_batch = get_ref_batch(self.env, batch_size=2**10, p=0.1)
+        else:
+            self._ref_batch = torch.empty([2**10, 4, 84, 84])
+        self._comm.bcast(self._ref_batch, root=0)
+        self.policy = Policy(self.env.observation_space.shape, self.env.action_space.n, self._ref_batch)
         self._stochastic_activation = kwargs.get('stochastic_activation', False)
         self.policy.stochastic_activation = self._stochastic_activation
         self.policy.gain = kwargs.get('gain', 1.0)
@@ -171,7 +176,7 @@ class ES:
 
         state = {"exp": self.exp,
                  "obj_kwargs": self.obj_kwargs,
-                 # "policy": self.policy,
+                 "_ref_batch": self._ref_batch,
                  "_stochastic_activation": self._stochastic_activation,
                  "optimizer": self.optimizer,
                  "_OpenAIES": self._OpenAIES,
@@ -213,7 +218,7 @@ class ES:
         torch.manual_seed(self._global_seed)
 
         self.env = get_env_from(self.exp)
-        self.policy = Policy(self.env.observation_space.shape, self.env.action_space.n, self._worker_rngs[self._rank])
+        self.policy = Policy(self.env.observation_space.shape, self.env.action_space.n, self._ref_batch)
         self.policy.stochastic_activation = self._stochastic_activation
         self.objective = self.policy.rollout
         self.policy.set_from_flat(self._running_best)
@@ -244,12 +249,12 @@ class ES:
         partial_objective = partial(self.objective, **self.obj_kwargs)
         for i in range(num_generations):
             self._generation_number += 1
-            # if num_generations % 200 == 0 and num_generations > 0:
-            #     self._weights *= np.array([self._sigma], dtype=np.float32)
-            #     self._rand_num_table /= np.array([self._sigma], dtype=np.float32)
-            #     self._sigma /= np.sqrt(10)
-            #     self._weights /= np.array([self._sigma], dtype=np.float32)
-            #     self._rand_num_table *= self._sigma
+            if num_generations % 151 == 0 and num_generations > 0:
+                self._weights *= np.array([self._sigma], dtype=np.float32)
+                self._rand_num_table /= np.array([self._sigma], dtype=np.float32)
+                self._sigma /= 5  # np.sqrt(10)
+                self._weights /= np.array([self._sigma], dtype=np.float32)
+                self._rand_num_table *= self._sigma
             self._update(partial_objective)
             log(self, "Gen {} took {}s.".format(self._generation_number, time.time() - t))
             t = time.time()

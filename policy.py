@@ -107,11 +107,9 @@ class VirtualBatchNorm(nn.Module):
 
 
 class Policy(nn.Module):
-    def __init__(self, input_shape, output_shape, rng=np.random.RandomState(0)):
+    def __init__(self, input_shape, output_shape, ref_batch=None):
         super(Policy, self).__init__()
 
-        self.rng = rng
-        self._ref_batch = None
         self.stochastic_activation = True
         self.gain = 1.0
         self.optimize = 'last_layer'  # 'last_layer', 'all_except_first_linear', 'all'
@@ -138,6 +136,7 @@ class Policy(nn.Module):
                                  nn.Linear(in_features=256, out_features=output_shape))
 
         self.apply(self.initialise_parameters)
+        self.initialise_VBN(ref_batch)
         self.eval()  # no gradients
 
     def forward(self, obs):
@@ -170,12 +169,6 @@ class Policy(nn.Module):
         rewards = []
 
         roll_obs = []
-
-        self.freeze_VBN(False)
-        if self._ref_batch is None:
-            self._ref_batch = get_ref_batch(env, batch_size=512, p=0.2)
-            self.forward(self._ref_batch)
-        self.freeze_VBN(True)
 
         # do rollouts until max_runs rollouts where done or
         # until time left is less than 70% of mean rollout length
@@ -211,11 +204,6 @@ class Policy(nn.Module):
     def play(self, env, theta=None, loop=False):
         if theta is not None:
             self.set_from_flat(theta)
-            self.freeze_VBN(False)
-            if self._ref_batch is None:
-                self._ref_batch = get_ref_batch(env, batch_size=512, p=0.2)
-                self.forward(self._ref_batch)
-            self.freeze_VBN(True)
 
         self.eval()
 
@@ -240,11 +228,6 @@ class Policy(nn.Module):
             env.close()
             print("Game stopped by user, total mean reward after {} runs: {:.2f}".format(len(all_rews), np.mean(all_rews)))
 
-    def freeze_VBN(self, freeze):
-        for m in self.modules():
-            if isinstance(m, VirtualBatchNorm):
-                m.update = not freeze
-
     def initialise_parameters(self, m):
         """
         Initialises the module parameters
@@ -261,6 +244,19 @@ class Policy(nn.Module):
             nn.init.xavier_normal_(m.weight.data, gain=self.gain)
             if m.bias is not None:
                 nn.init.constant_(m.bias.data, 0)
+
+    def freeze_VBN(self, freeze):
+        for m in self.modules():
+            if isinstance(m, VirtualBatchNorm):
+                m.update = not freeze
+
+    def initialise_VBN(self, ref_batch):
+        self.freeze_VBN(False)
+        if ref_batch is not None:
+            self.forward(ref_batch)
+        else:
+            print("Generate ref_batch and manually initialise VirtualBatchNorm!")
+        self.freeze_VBN(True)
 
     def get_flat(self):
         """
