@@ -11,6 +11,8 @@ short_names = [s[:-len("NoFrameskip-v4")] for s in envs]
 # to do this then the game will not progress and looked paused
 # like you say it seems.
 
+# Seaquest: Resurfacing without any rescued crew members will sink you as well.
+
 
 @click.command()
 @click.option('-g', '--game', default="Breakout")
@@ -19,6 +21,7 @@ def play(game, random):
     game = game.capitalize()
     i = short_names.index(game)
     env = gym.make(envs[i])
+    print(env.get_action_meanings())
     env = wrap_env(env, fire_reset=env.get_action_meanings()[1] == 'FIRE')
     i = 0
     if random:
@@ -37,11 +40,14 @@ def play(game, random):
                     break
 
     else:
-        for _ in range(1):
+        for _ in range(3):
             _ = env.reset()
-            while i < 3100:
-                # time.sleep(0.3)
-                _, _, done, info = env.step(3)  # env.action_space.sample())
+            while True:
+                time.sleep(0.02)
+                if i < 40:
+                    _, _, done, info = env.step(5)  # env.action_space.sample())
+                else:
+                    _, _, done, info = env.step(2)
                 env.render()
                 i += 1
                 print(i, done, info)
@@ -49,17 +55,17 @@ def play(game, random):
                     print("I QUIT!\n")
                     break
 
-            for j in range(18):
-                i += 1
-                print(j)
-                time.sleep(1)
-                if done:
-                    print("I QUIT!\n")
-                    break
-                _, _, done, info = env.step(j)  # env.action_space.sample())
-                env.render()
+            # for j in range(18):
+            #     i += 1
+            #     print(j)
+            #     time.sleep(1)
+            #     if done:
+            #         print("I QUIT!\n")
+            #         break
+            #     _, _, done, info = env.step(j)  # env.action_space.sample())
+            #     env.render()
 
-            time.sleep(5)
+            time.sleep(2)
 
     env.close()
     print(env.get_action_meanings())

@@ -227,7 +227,7 @@ class ES:
         self._rank = self._comm.Get_rank()
         torch.manual_seed(self._global_seed)
 
-        self.env = get_env_from(self.exp)
+        self.env = self.obj_kwargs['env']  # get_env_from(self.exp)
         # self.policy = Policy(self.env.observation_space.shape, self.env.action_space.n, self._ref_batch)
         # self.policy.stochastic_activation = self._stochastic_activation
         # self.policy.set_from_flat(self._running_best)
@@ -392,9 +392,10 @@ class ES:
         if self._OpenAIES:
             ur, self._theta = self.optimizer.update(g)
             self._update_ratios.append(ur)
-
         else:  # old routine without optimizer, here g is already the new theta
             multi_slice_assign(self._theta, g, master_dim_slices, master_dim_slices)
+
+        self._old_theta = self.theta.copy()
 
     def _update_log(self, all_rewards):
 

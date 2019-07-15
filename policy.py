@@ -229,7 +229,9 @@ class Policy(nn.Module):
                         break
         else:
             try:
+                import time
                 while not done or loop:
+                    time.sleep(0.02)
                     action = int(self.forward(to_obs_tensor(obs)))
                     obs, rew, done, _ = env.step(action)
                     rewards += rew
