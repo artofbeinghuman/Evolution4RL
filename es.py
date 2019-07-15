@@ -331,7 +331,7 @@ class ES:
         if self._rank == np.argmax(all_rewards) and np.max(all_rewards) >= self._running_best_reward:
             path = '{}-gen{}-rank{}-rew{:.2f}.mp4'.format(self._path, self._generation_number, self._rank, local_rew[0])
             save_video(roll_obs, path)
-            log(self, '## saved video to {}'.format(path))
+            log(self, '## saved running best video to {}'.format(path))
 
         # update theta and log generation results
         if self._rank == 0:
@@ -365,7 +365,7 @@ class ES:
                 if parent_num == 0 and all_rewards[rank] >= self._running_best_reward:
                     self._update_best_flag = True
                     self._running_best_reward = all_rewards[rank]
-                    # log(self, "## New running best: {:.2f} ##".format(self._running_best_reward))
+                    log(self, "## New running best: {:.2f} ##".format(self._running_best_reward))
                     # Since the best is always first, copy theta elements
                     self._running_best[:] = self._old_theta.copy()  # unperturbed theta
 
@@ -422,7 +422,7 @@ class ES:
             path = '{}.showcase.mp4'.format(self._path)
             save_video(obs, path)
             log(self, '## saved showcase to {}\n'.format(path))
-        print("Showcase performance: {:.2f} vs performance during Training: {:.2f}".format(np.mean(rews), self._running_best_reward))
+        log(self, "Showcase performance: {:.2f} vs performance during Training: {:.2f}".format(np.mean(rews), self._running_best_reward))
 
     def plot_reward_over_time(self, prefix='test', logy=True, savefile=False):
         """

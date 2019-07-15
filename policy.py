@@ -213,7 +213,6 @@ class Policy(nn.Module):
         obs = env.reset()
         done = False
         if save:
-            print("Running Showcase:")
             for _ in range(5):
                 while True:
                     action = int(self.forward(to_obs_tensor(obs)))
