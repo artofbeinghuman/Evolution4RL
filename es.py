@@ -77,10 +77,21 @@ class ES:
         """
         # Initiate MPI
         from mpi4py import MPI
+        import socket
         self._MPI = MPI
         self._comm = MPI.COMM_WORLD
         self._rank = self._comm.Get_rank()
         self._size = self._comm.Get_size()
+
+        # create communication groups which are local to each node.
+        # Later generate random noise table on each node locally via these comm_local
+        local_ip = socket.gethostname()
+        all_ips = self._comm.gather(local_ip, root=0)
+        if self._rank == 0:
+            all_ips = list(set(all_ips))
+        all_ips = self._comm.bcast(all_ips, root=0)
+        self._comm_local = self._comm.Split(color=all_ips.index(local_ip), key=self._rank)
+
         if self._size > 1:
             assert self._size % 2 == 0
 
@@ -95,8 +106,8 @@ class ES:
         self._global_seed = kwargs.get('seed', 123)
         torch.manual_seed(self._global_seed)
         self._global_rng = np.random.RandomState(self._global_seed)
-        self._seed_set = self._global_rng.choice(1000000, size=int(np.ceil(self._size / 2)), replace=False)
         self._noise_seed = self._global_rng.choice(1000000, size=1)
+        self._seed_set = self._global_rng.choice(1000000, size=int(np.ceil(self._size / 2)), replace=False)
         # for mirrored sampling, two subsequent workers (according to rank) will have the same seed/rng
         # the even ranked workers will perturb positively, the odd ones negatively
         self._seed_set = [s for ss in [[s, s] for s in self._seed_set] for s in ss]
@@ -163,13 +174,13 @@ class ES:
         # int(5 * 10**8)
         self._rand_num_table_size = kwargs.get("rand_num_table_size", 200000)  # 250000000 ~ 1GB of noise
         nbytes = self._rand_num_table_size * MPI.FLOAT.Get_size() if self._rank == 0 else 0
-        win = MPI.Win.Allocate_shared(nbytes, MPI.FLOAT.Get_size(), comm=self._comm)
+        win = MPI.Win.Allocate_shared(nbytes, MPI.FLOAT.Get_size(), comm=self._comm_local)
         buf, itemsize = win.Shared_query(0)
         assert itemsize == MPI.FLOAT.Get_size()
         self._rand_num_table = np.ndarray(buffer=buf, dtype='f', shape=(self._rand_num_table_size,))
-        if self._rank == 0:
+        if self._comm_local.rank == 0:
             t = time.time()
-            noise_rng = np.random.RandomState(self._global_seed)
+            noise_rng = np.random.RandomState(self._noise_seed)
             self._rand_num_table[:] = noise_rng.randn(self._rand_num_table_size)
             log(self, "Calculated Random Table in {}s.".format(time.time() - t))
             # Fold step-size into noise
@@ -244,7 +255,7 @@ class ES:
         if False:
             if self._rank == 0:
                 t = time.time()
-                noise_rng = np.random.RandomState(self._global_seed)
+                noise_rng = np.random.RandomState(self._noise_seed)
                 self._rand_num_table[:] = noise_rng.randn(self._rand_num_table_size)
                 log(self, "Calculated Random Table in {}s".format(time.time() - t))
                 # Fold step-size into table values
