@@ -95,8 +95,8 @@ class ES:
         self._global_seed = kwargs.get('seed', 123)
         torch.manual_seed(self._global_seed)
         self._global_rng = np.random.RandomState(self._global_seed)
-        self._seed_set = self._global_rng.choice(1000000, size=int(np.ceil(self._size / 2)),
-                                                 replace=False)
+        self._seed_set = self._global_rng.choice(1000000, size=int(np.ceil(self._size / 2)), replace=False)
+        self._noise_seed = self._global_rng.choice(1000000, size=1)
         # for mirrored sampling, two subsequent workers (according to rank) will have the same seed/rng
         # the even ranked workers will perturb positively, the odd ones negatively
         self._seed_set = [s for ss in [[s, s] for s in self._seed_set] for s in ss]
@@ -115,9 +115,15 @@ class ES:
         self._stochastic_activation = kwargs.get('stochastic_activation', False)
         self.policy.stochastic_activation = self._stochastic_activation
         # self.policy.optimize = 'all_except_first_linear'
+
+        # State
         self._theta = self.policy.get_flat()
-        log(self, "Optimizing {} out of {} network parameters ({:.2f}%).".format(int(self._theta.size), self.policy.parameters, 100 * int(self._theta.size) / self.policy.parameters))
-        self.optimizer = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](self._theta, **exp['optimizer']['args'])
+        self._old_theta = self._theta.copy()
+        self._running_best = self._theta.copy()
+        self._running_best_reward = np.float32(np.finfo(np.float32).min)
+        self._update_best_flag = False
+        log(self, "Optimizing {} out of {} network parameters ({:.2f}%).".format(int(self._theta.size), self.policy.num_parameters, 100 * int(self._theta.size) / self.policy.num_parameters))
+        self.optimizer = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](self._old_theta, **exp['optimizer']['args'])
         self._update_ratios = []
 
         # User input parameters
@@ -145,7 +151,7 @@ class ES:
             self._weights.astype(np.float32, copy=False)
         else:
             # Classics ES:
-            self._num_parents = kwargs.get('num_parents', int(self._size / 3))  # truncated selection
+            self._num_parents = kwargs.get('num_parents', int(self._size / 2))  # truncated selection
             # self._num_parents = 1  # int(np.ceil(0.1 * self._size))
             self._weights = np.log(self._num_parents + 0.5) - np.log(
                 np.arange(1, self._num_parents + 1))
@@ -153,12 +159,6 @@ class ES:
             self._weights.astype(np.float32, copy=False)
 
             self._update_ratios = ['-']
-
-        # State
-        self._old_theta = self._theta.copy()
-        self._running_best = self._theta.copy()
-        self._running_best_reward = np.float32(np.finfo(np.float32).min)
-        self._update_best_flag = False
 
         # int(5 * 10**8)
         self._rand_num_table_size = kwargs.get("rand_num_table_size", 200000)  # 250000000 ~ 1GB of noise
@@ -169,7 +169,8 @@ class ES:
         self._rand_num_table = np.ndarray(buffer=buf, dtype='f', shape=(self._rand_num_table_size,))
         if self._rank == 0:
             t = time.time()
-            self._rand_num_table[:] = self._global_rng.randn(self._rand_num_table_size)
+            noise_rng = np.random.RandomState(self._global_seed)
+            self._rand_num_table[:] = noise_rng.randn(self._rand_num_table_size)
             log(self, "Calculated Random Table in {}s.".format(time.time() - t))
             # Fold step-size into noise
             self._rand_num_table *= self._sigma
@@ -187,6 +188,7 @@ class ES:
                  "_ref_batch": self._ref_batch,
                  "policy": self.policy,
                  "_path": self._path,
+                 "_noise_seed": self._noise_seed,
                  "_stochastic_activation": self._stochastic_activation,
                  "optimizer": self.optimizer,
                  "_OpenAIES": self._OpenAIES,
@@ -242,7 +244,8 @@ class ES:
         if False:
             if self._rank == 0:
                 t = time.time()
-                self._rand_num_table[:] = self._global_rng.randn(self._rand_num_table_size)
+                noise_rng = np.random.RandomState(self._global_seed)
+                self._rand_num_table[:] = noise_rng.randn(self._rand_num_table_size)
                 log(self, "Calculated Random Table in {}s".format(time.time() - t))
                 # Fold step-size into table values
                 self._rand_num_table *= self._sigma
@@ -339,6 +342,8 @@ class ES:
         else:
             self._update_theta(all_rewards, unmatched_dimension_slices, dimension_slices, perturbation_slices)
 
+        self._comm.Barrier()
+
     def _update_theta(self, all_rewards, master_dim_slices, local_dim_slices,
                       local_perturbation_slices):
         """
@@ -360,8 +365,8 @@ class ES:
                 if parent_num == 0 and all_rewards[rank] >= self._running_best_reward:
                     self._update_best_flag = True
                     self._running_best_reward = all_rewards[rank]
-                    log(self, "## New running best: {:.2f} ##".format(self._running_best_reward))
-                    # Since the best is always first, copy centroid (theta) elements
+                    # log(self, "## New running best: {:.2f} ##".format(self._running_best_reward))
+                    # Since the best is always first, copy theta elements
                     self._running_best[:] = self._old_theta.copy()  # unperturbed theta
 
                 if rank == self._rank:
@@ -389,13 +394,13 @@ class ES:
                     # advance the random draw for all other workers, such that they stay synchronised
                     self._draw_random_table_slices(self._worker_rngs[rank])
 
+        # update step
         if self._OpenAIES:
-            ur, self._theta = self.optimizer.update(g)
+            ur, self._old_theta = self.optimizer.update(g)
             self._update_ratios.append(ur)
+            multi_slice_assign(self._theta, self._old_theta, master_dim_slices, master_dim_slices)
         else:  # old routine without optimizer, here g is already the new theta
             multi_slice_assign(self._theta, g, master_dim_slices, master_dim_slices)
-
-        self._old_theta = self.theta.copy()
 
     def _update_log(self, all_rewards):
 
@@ -412,12 +417,12 @@ class ES:
 
     def showcase(self, save=False):
         print("Showcasing running best of: {:.2f}".format(self._running_best_reward))
-        obs = self.policy.play(self.env, theta=self._running_best.copy(), loop=True, save=save)
+        obs, rews = self.policy.play(self.env, theta=self._running_best.copy(), loop=True, save=save)
         if save:
             path = '{}.showcase.mp4'.format(self._path)
             save_video(obs, path)
             log(self, '## saved showcase to {}\n'.format(path))
-        print("Running best was: {:.2f}".format(self._running_best_reward))
+        print("Showcase performance: {:.2f} vs performance during Training: {:.2f}".format(np.mean(rews), self._running_best_reward))
 
     def plot_reward_over_time(self, prefix='test', logy=True, savefile=False):
         """

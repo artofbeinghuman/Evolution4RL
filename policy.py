@@ -246,7 +246,7 @@ class Policy(nn.Module):
             except KeyboardInterrupt:
                 env.close()
                 print("Game stopped by user, total mean reward after {} runs: {:.2f}".format(len(all_rews), np.mean(all_rews)))
-        return all_obs
+        return all_obs, all_rews
 
     def initialise_parameters(self, m):
         """
@@ -346,7 +346,7 @@ class Policy(nn.Module):
         self.ref_list.append(ref_batch)
 
     @property
-    def parameters(self):
+    def num_parameters(self):
         n = 0
         for m in self.modules():
             if not isinstance(m, Policy) and not isinstance(m, nn.Sequential):
