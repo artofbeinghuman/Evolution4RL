@@ -105,6 +105,8 @@ class VirtualBatchNorm(nn.Module):
 
 """
 
+modes = ['last_layer', 'cnns_and_last_linear', 'all_except_first_linear', 'all']
+
 
 class Policy(nn.Module):
     def __init__(self, input_shape, output_shape, ref_batch=None):
@@ -112,7 +114,7 @@ class Policy(nn.Module):
 
         self.stochastic_activation = True
         self.gain = 1.0
-        self.optimize = 'last_layer'  # 'last_layer', 'cnns_and_last_linear', 'all_except_first_linear', 'all'
+        self.optimize = 'last_layer'
 
         def conv_output(width, kernel, stride, padding=0):
             return int((width - kernel + 2 * padding) // stride + 1)

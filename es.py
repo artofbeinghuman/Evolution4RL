@@ -125,7 +125,7 @@ class ES:
         self.policy = Policy(self.env.observation_space.shape, self.env.action_space.n, self._ref_batch)
         self._stochastic_activation = kwargs.get('stochastic_activation', False)
         self.policy.stochastic_activation = self._stochastic_activation
-        # self.policy.optimize = 'all_except_first_linear'
+        self.policy.optimize = kwargs.get('optimize', 'last_layer')
 
         # State
         self._theta = self.policy.get_flat()
@@ -342,7 +342,7 @@ class ES:
         if self._rank == np.argmax(all_rewards) and np.max(all_rewards) >= self._running_best_reward:
             path = '{}-gen{}-rank{}-rew{:.2f}.mp4'.format(self._path, self._generation_number, self._rank, local_rew[0])
             save_video(roll_obs, path)
-            log(self, '## saved running best video to {}'.format(path))
+            print('## saved running best video to {}'.format(path))
 
         # update theta and log generation results
         if self._rank == 0:
@@ -433,7 +433,7 @@ class ES:
             path = '{}.showcase.mp4'.format(self._path)
             save_video(obs, path)
             log(self, '## saved showcase to {}\n'.format(path))
-        log(self, "Showcase performance: {:.2f} vs performance during Training: {:.2f}".format(np.mean(rews), self._running_best_reward))
+            log(self, "Showcase performance: {:.2f} vs performance during Training: {:.2f}".format(np.mean(rews), self._running_best_reward))
 
     def plot_reward_over_time(self, prefix='test', logy=True, savefile=False):
         """

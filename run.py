@@ -2,6 +2,7 @@ from es import ES
 import click
 import json
 import datetime
+from policy import modes as optimization_modes
 
 # 62 envs
 envs = ['AlienNoFrameskip-v4', 'AsterixNoFrameskip-v4', 'AsteroidsNoFrameskip-v4', 'AtlantisNoFrameskip-v4', 'BattleZoneNoFrameskip-v4', 'BeamRiderNoFrameskip-v4', 'BerzerkNoFrameskip-v4', 'BowlingNoFrameskip-v4', 'BoxingNoFrameskip-v4', 'BreakoutNoFrameskip-v4', 'ChopperCommandNoFrameskip-v4', 'CrazyClimberNoFrameskip-v4', 'DefenderNoFrameskip-v4', 'DemonAttackNoFrameskip-v4', 'ElevatorActionNoFrameskip-v4', 'EnduroNoFrameskip-v4', 'FishingDerbyNoFrameskip-v4', 'FreewayNoFrameskip-v4', 'FrostbiteNoFrameskip-v4', 'GravitarNoFrameskip-v4', 'HeroNoFrameskip-v4', 'IceHockeyNoFrameskip-v4', 'JamesbondNoFrameskip-v4', 'KangarooNoFrameskip-v4', 'KrullNoFrameskip-v4', 'KungFuMasterNoFrameskip-v4', 'MontezumaRevengeNoFrameskip-v4', 'MsPacmanNoFrameskip-v4', 'NameThisGameNoFrameskip-v4', 'PhoenixNoFrameskip-v4', 'PitfallNoFrameskip-v4', 'PongNoFrameskip-v4', 'PrivateEyeNoFrameskip-v4', 'QbertNoFrameskip-v4', 'RiverraidNoFrameskip-v4', 'RoadRunnerNoFrameskip-v4', 'RobotankNoFrameskip-v4', 'SeaquestNoFrameskip-v4', 'SolarisNoFrameskip-v4', 'SpaceInvadersNoFrameskip-v4', 'StarGunnerNoFrameskip-v4', 'TimePilotNoFrameskip-v4', 'UpNDownNoFrameskip-v4', 'VentureNoFrameskip-v4', 'YarsRevengeNoFrameskip-v4', 'ZaxxonNoFrameskip-v4', 'JourneyEscapeNoFrameskip-v4', 'AdventureNoFrameskip-v4', 'AirRaidNoFrameskip-v4', 'AmidarNoFrameskip-v4', 'AssaultNoFrameskip-v4', 'BankHeistNoFrameskip-v4', 'CarnivalNoFrameskip-v4', 'CentipedeNoFrameskip-v4', 'DoubleDunkNoFrameskip-v4', 'GopherNoFrameskip-v4', 'PooyanNoFrameskip-v4', 'SkiingNoFrameskip-v4', 'TennisNoFrameskip-v4', 'TutankhamNoFrameskip-v4', 'VideoPinballNoFrameskip-v4', 'WizardOfWorNoFrameskip-v4']
@@ -19,8 +20,10 @@ short_names = [s[:-len("NoFrameskip-v4")] for s in envs]
 @click.option('-c', '--classic_es', is_flag=True)
 @click.option('-sa', '--stochastic_activation', is_flag=True)
 @click.option('--gain', default=1.0)
-def es(game, render, config, generations, sigma, seed, random_noise_size, classic_es, stochastic_activation, gain):
+@click.option('-o', '--optimize', default=0)
+def es(game, render, config, generations, sigma, seed, random_noise_size, classic_es, stochastic_activation, gain, optimize):
     timestamp = datetime.datetime.now()
+    optimize = optimization_modes[optimize]
 
     if config == "default":
         config = "configurations/default_atari_config.json"
@@ -35,9 +38,9 @@ def es(game, render, config, generations, sigma, seed, random_noise_size, classi
             config = json.loads(f.read())
 
     path = "save/{}-{}_{}".format(config["env_short"], str(timestamp.date()), str(timestamp.time()))
-    txt = "Log {}\n\nWith parameters: \ngame={} ({}) \nconfig={} \ngenerations={} \nsigma={} \nseed={} \nrandom_noise_size={} \nclassic_es={} \nstochastic_activation={} \n(xavier) gain={} \n".format(path, config['env_short'], config['env_id'], config, generations, sigma, seed, random_noise_size, classic_es, stochastic_activation, gain)
+    txt = "Log {}\n\nWith parameters: \ngame={} ({}) \nconfig={} \ngenerations={} \nsigma={} \nseed={} \nrandom_noise_size={} \nclassic_es={} \nstochastic_activation={} \n(xavier) gain={} \noptimize={}\n".format(path, config['env_short'], config['env_id'], config, generations, sigma, seed, random_noise_size, classic_es, stochastic_activation, gain, optimize)
 
-    worker = ES(config, rand_num_table_size=random_noise_size, sigma=sigma, seed=seed, render=render, verbose=True, log_path=path, initial_text=txt, classic_es=classic_es, stochastic_activation=stochastic_activation, gain=gain)
+    worker = ES(config, rand_num_table_size=random_noise_size, sigma=sigma, seed=seed, render=render, verbose=True, log_path=path, initial_text=txt, classic_es=classic_es, stochastic_activation=stochastic_activation, gain=gain, optimize=optimize)
     worker(generations)
     worker.save(path + '.es')
 
