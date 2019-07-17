@@ -105,7 +105,7 @@ class VirtualBatchNorm(nn.Module):
 
 """
 
-modes = ['last_layer', 'cnns_and_last_linear', 'all_except_first_linear', 'all']
+modes = ['last_layer', 'cnns_and_last_linear', 'all_except_first_linear', 'all_linear', 'all']
 
 
 class Policy(nn.Module):
@@ -304,6 +304,10 @@ class Policy(nn.Module):
             for m in [self.conv[0], self.conv[3], self.mlp[3]]:
                 for p in m.parameters():
                     flat_parameters.append(p.data.view(-1))
+        elif self.optimize == 'all_linear':
+            for m in [self.mlp[0], self.mlp[3]]:
+                for p in m.parameters():
+                    flat_parameters.append(p.data.view(-1))
         elif self.optimize == 'last_layer':
             for p in self.mlp[3].parameters():
                 flat_parameters.append(p.data.view(-1))
@@ -332,6 +336,12 @@ class Policy(nn.Module):
                     start += size
         elif self.optimize == 'cnns_and_last_linear':
             for m in [self.conv[0], self.conv[3], self.mlp[3]]:
+                for p in m.parameters():
+                    size = np.prod(p.data.shape)
+                    p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
+                    start += size
+        elif self.optimize == 'all_linear':
+            for m in [self.mlp[0], self.mlp[3]]:
                 for p in m.parameters():
                     size = np.prod(p.data.shape)
                     p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
