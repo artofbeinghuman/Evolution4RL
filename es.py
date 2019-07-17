@@ -137,7 +137,10 @@ class ES:
         self._running_best_reward = np.float32(np.finfo(np.float32).min)
         self._update_best_flag = False
         log(self, "Optimizing {} out of {} network parameters ({:.2f}%).".format(int(self._theta.size), self.policy.num_parameters, 100 * int(self._theta.size) / self.policy.num_parameters))
-        self.optimizer = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](self._old_theta, **exp['optimizer']['args'])
+        self.optimizer1 = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](self._old_theta, **exp['optimizer']['args'])
+        self.policy.optimize = 'all_except_linear'
+        self.optimizer2 = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](self.policy.get_flat(), **exp['optimizer']['args'])
+        self.policy.optimize = 'all_linear'
         self._update_ratios = []
 
         # User input parameters
@@ -150,6 +153,7 @@ class ES:
         self._num_parameters = len(self._theta)
         self._num_mutations = int(self._num_parameters / kwargs.get('mutate', 1))  # limited perturbartion ES as in Zhang et al 2017, ch.4.1
         self._OpenAIES = not kwargs.get('classic_es', True)
+        self._video = not kwargs.get('no_videos', True)
 
         if self._OpenAIES:
             # use centered ranks [0.5, -0.5]
@@ -277,23 +281,23 @@ class ES:
         for i in range(num_generations):
 
             # alternate between optimizing linear, and the rest
-            if self._generation_number % 20 == 0:
+            if self._generation_number % 4 == 0:
                 self.policy.optimize = 'all_linear'
-                self._theta = self.policy.get_flat()
-                if self._generation_number == 0:
-                    pass
-                else:
-                    self._old_theta2 = self._old_theta.copy()
-                    self._old_theta = self._old_theta1.copy()
+                self.optimizer = self.optimizer1
+                self._theta = self.optimizer.theta
+                self._old_theta = self.optimizer.theta
+                self._num_parameters = len(self._theta)
+                self._num_mutations = self._num_parameters
+                log(self, "now optimizing all linear layers")
 
-            elif self._generation_number % 20 == 10:
+            elif self._generation_number % 4 == 2:
                 self.policy.optimize = 'all_except_linear'
-                self._theta = self.policy.get_flat()
-                self._old_theta1 = self._old_theta.copy()
-                if self._generation_number == 10:
-                    self._old_theta = self._theta.copy()
-                else:
-                    self._old_theta = self._old_theta2.copy()
+                self.optimizer = self.optimizer2
+                self._theta = self.optimizer.theta
+                self._old_theta = self.optimizer.theta
+                self._num_parameters = len(self._theta)
+                self._num_mutations = self._num_parameters
+                log(self, "now optimizing all EXCEPT the linear layers")
 
             self._generation_number += 1
             # if self._generation_number % 151 == 0 and self._generation_number > 0:
@@ -307,7 +311,8 @@ class ES:
             t = time.time()
         log(self, "\nFinished run in " + get_hms_string(time.time() - tt) + " with total best {:.2f}.\n".format(self._running_best_reward))
         if self._rank == 0:
-            self.showcase(save=True)
+            if self._video:
+                self.showcase(save=True)
             self.log.close()
 
     def _draw_random_table_slices(self, rng):
@@ -355,7 +360,7 @@ class ES:
         self._update_log(all_rewards)
 
         # save video of new best run
-        if self._rank == np.argmax(all_rewards) and np.max(all_rewards) >= self._running_best_reward:
+        if self._rank == np.argmax(all_rewards) and np.max(all_rewards) >= self._running_best_reward and self._video:
             path = '{}-gen{}-rank{}-rew{:.2f}.mp4'.format(self._path, self._generation_number, self._rank, local_rew[0])
             save_video(roll_obs, path)
             print('## saved running best video to {}'.format(path))
