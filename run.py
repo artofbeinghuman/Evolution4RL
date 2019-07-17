@@ -21,7 +21,8 @@ short_names = [s[:-len("NoFrameskip-v4")] for s in envs]
 @click.option('-sa', '--stochastic_activation', is_flag=True)
 @click.option('--gain', default=1.0)
 @click.option('-o', '--optimize', default=0)
-def es(game, render, config, generations, sigma, seed, random_noise_size, classic_es, stochastic_activation, gain, optimize):
+@click.option('-m', '--mutate', default=1)
+def es(game, render, config, generations, sigma, seed, random_noise_size, classic_es, stochastic_activation, gain, optimize, mutate):
     timestamp = datetime.datetime.now()
     optimize = optimization_modes[optimize]
 
@@ -38,9 +39,9 @@ def es(game, render, config, generations, sigma, seed, random_noise_size, classi
             config = json.loads(f.read())
 
     path = "save/{}-{}_{}".format(config["env_short"], str(timestamp.date()), str(timestamp.time()))
-    txt = "Log {}\n\nWith parameters: \ngame={} ({}) \nconfig={} \ngenerations={} \nsigma={} \nseed={} \nrandom_noise_size={} \nclassic_es={} \nstochastic_activation={} \n(xavier) gain={} \noptimize={}\n".format(path, config['env_short'], config['env_id'], config, generations, sigma, seed, random_noise_size, classic_es, stochastic_activation, gain, optimize)
+    txt = "Log {}\n\nWith parameters: \ngame={} ({}) \nconfig={} \ngenerations={} \nsigma={} \nseed={} \nrandom_noise_size={} \nclassic_es={} \nstochastic_activation={} \n(xavier) gain={} \noptimize={}\nmutate={} parameters\n".format(path, config['env_short'], config['env_id'], config, generations, sigma, seed, random_noise_size, classic_es, stochastic_activation, gain, optimize, "all" if mutate == 1 else "1/{} of".format(mutate))
 
-    worker = ES(config, rand_num_table_size=random_noise_size, sigma=sigma, seed=seed, render=render, verbose=True, log_path=path, initial_text=txt, classic_es=classic_es, stochastic_activation=stochastic_activation, gain=gain, optimize=optimize)
+    worker = ES(config, rand_num_table_size=random_noise_size, sigma=sigma, seed=seed, render=render, verbose=True, log_path=path, initial_text=txt, classic_es=classic_es, stochastic_activation=stochastic_activation, gain=gain, optimize=optimize, mutate=mutate)
     worker(generations)
     worker.save(path + '.es')
 

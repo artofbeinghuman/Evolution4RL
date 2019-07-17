@@ -83,15 +83,6 @@ class ES:
         self._rank = self._comm.Get_rank()
         self._size = self._comm.Get_size()
 
-        # create communication groups which are local to each node.
-        # Later generate random noise table on each node locally via these comm_local
-        local_ip = socket.gethostname()
-        all_ips = self._comm.gather(local_ip, root=0)
-        if self._rank == 0:
-            all_ips = list(set(all_ips))
-        all_ips = self._comm.bcast(all_ips, root=0)
-        self._comm_local = self._comm.Split(color=all_ips.index(local_ip), key=self._rank)
-
         if self._size > 1:
             assert self._size % 2 == 0
 
@@ -102,6 +93,17 @@ class ES:
         else:
             self._path = ""
         self._path = self._comm.bcast(self._path, root=0)
+
+        # create communication groups which are local to each node.
+        # Later generate random noise table on each node locally via these comm_local
+        local_ip = socket.gethostname()
+        all_ips = self._comm.gather(local_ip, root=0)
+        if self._rank == 0:
+            num = len(all_ips)
+            all_ips = list(set(all_ips))
+            log(self, "{} workers active on {} nodes.".format(num, len(all_ips)))
+        all_ips = self._comm.bcast(all_ips, root=0)
+        self._comm_local = self._comm.Split(color=all_ips.index(local_ip), key=self._rank)
 
         self._global_seed = kwargs.get('seed', 123)
         torch.manual_seed(self._global_seed)
@@ -145,7 +147,7 @@ class ES:
         self.obj_kwargs = {'env': self.env, 'timestep_limit': timestep_limit, 'max_runs': max_runs, 'rank': self._rank, 'render': render}
         self._sigma = np.float32(kwargs.get('sigma', 0.05))  # this is the noise_stdev parameter from Uber json-configs
         self._num_parameters = len(self._theta)
-        self._num_mutations = kwargs.get('num_mutations', self._num_parameters)  # limited perturbartion ES as in Zhang et al 2017, ch.4.1
+        self._num_mutations = int(self._num_parameters / kwargs.get('mutate', 1))  # limited perturbartion ES as in Zhang et al 2017, ch.4.1
         self._OpenAIES = not kwargs.get('classic_es', True)
 
         if self._OpenAIES:
@@ -168,7 +170,6 @@ class ES:
                 np.arange(1, self._num_parents + 1))
             self._weights = self._weights / np.sum(self._weights)
             self._weights.astype(np.float32, copy=False)
-
             self._update_ratios = ['-']
 
         # int(5 * 10**8)
