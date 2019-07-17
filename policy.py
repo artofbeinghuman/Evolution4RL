@@ -109,12 +109,12 @@ modes = ['last_layer', 'cnns_and_last_linear', 'all_except_first_linear', 'all']
 
 
 class Policy(nn.Module):
-    def __init__(self, input_shape, output_shape, ref_batch=None):
+    def __init__(self, input_shape, output_shape, ref_batch=None, optimize='last_layer'):
         super(Policy, self).__init__()
 
         self.stochastic_activation = True
         self.gain = 1.0
-        self.optimize = 'last_layer'
+        self.optimize = optimize
 
         def conv_output(width, kernel, stride, padding=0):
             return int((width - kernel + 2 * padding) // stride + 1)

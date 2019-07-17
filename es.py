@@ -101,7 +101,7 @@ class ES:
         if self._rank == 0:
             num = len(all_ips)
             all_ips = list(set(all_ips))
-            log(self, "{} workers active on {} nodes.".format(num, len(all_ips)))
+            log(self, "{} workers active on {}.".format(num, "{} node".format(len(all_ips)) if len(all_ips) == 1 else "{} nodes".format(len(all_ips))))
         all_ips = self._comm.bcast(all_ips, root=0)
         self._comm_local = self._comm.Split(color=all_ips.index(local_ip), key=self._rank)
 
@@ -124,10 +124,10 @@ class ES:
         self.env = get_env_from(exp)
         self._ref_batch = get_ref_batch(self.env, batch_size=2**10, p=0.2) if self._rank == 0 else torch.empty([2**10, 4, 84, 84])
         self._ref_batch = self._comm.bcast(self._ref_batch, root=0)
-        self.policy = Policy(self.env.observation_space.shape, self.env.action_space.n, self._ref_batch)
+        self._optimize = kwargs.get('optimize', 'last_layer')
+        self.policy = Policy(self.env.observation_space.shape, self.env.action_space.n, self._ref_batch, self._optimize)
         self._stochastic_activation = kwargs.get('stochastic_activation', False)
         self.policy.stochastic_activation = self._stochastic_activation
-        self.policy.optimize = kwargs.get('optimize', 'last_layer')
 
         # State
         self._theta = self.policy.get_flat()
@@ -200,6 +200,7 @@ class ES:
                  "_ref_batch": self._ref_batch,
                  "policy": self.policy,
                  "_path": self._path,
+                 "_optimize": self._optimize,
                  "_noise_seed": self._noise_seed,
                  "_stochastic_activation": self._stochastic_activation,
                  "optimizer": self.optimizer,
