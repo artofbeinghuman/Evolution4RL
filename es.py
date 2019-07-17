@@ -131,6 +131,7 @@ class ES:
 
         # State
         self._theta = self.policy.get_flat()
+        # print("worker {} on node {}:".format(self._rank, socket.gethostname()), np.sum(self._theta), len(self._theta))
         self._old_theta = self._theta.copy()
         self._running_best = self._theta.copy()
         self._running_best_reward = np.float32(np.finfo(np.float32).min)
@@ -274,13 +275,33 @@ class ES:
         tt = time.time()
         partial_objective = partial(self.objective, **self.obj_kwargs)
         for i in range(num_generations):
+
+            # alternate between optimizing linear, and the rest
+            if self._generation_number % 20 == 0:
+                self.policy.optimize = 'all_linear'
+                self._theta = self.policy.get_flat()
+                if self._generation_number == 0:
+                    pass
+                else:
+                    self._old_theta2 = self._old_theta.copy()
+                    self._old_theta = self._old_theta1.copy()
+
+            elif self._generation_number % 20 == 10:
+                self.policy.optimize = 'all_except_linear'
+                self._theta = self.policy.get_flat()
+                self._old_theta1 = self._old_theta.copy()
+                if self._generation_number == 10:
+                    self._old_theta = self._theta.copy()
+                else:
+                    self._old_theta = self._old_theta2.copy()
+
             self._generation_number += 1
-            if num_generations % 151 == 0 and num_generations > 0:
-                self._weights *= np.array([self._sigma], dtype=np.float32)
-                self._rand_num_table /= np.array([self._sigma], dtype=np.float32)
-                self._sigma /= 5  # np.sqrt(10)
-                self._weights /= np.array([self._sigma], dtype=np.float32)
-                self._rand_num_table *= self._sigma
+            # if self._generation_number % 151 == 0 and self._generation_number > 0:
+            #     self._weights *= np.array([self._sigma], dtype=np.float32)
+            #     self._rand_num_table /= np.array([self._sigma], dtype=np.float32)
+            #     self._sigma /= 5  # np.sqrt(10)
+            #     self._weights /= np.array([self._sigma], dtype=np.float32)
+            #     self._rand_num_table *= self._sigma
             self._update(partial_objective)
             log(self, "Gen {} took {}s.".format(self._generation_number, time.time() - t))
             t = time.time()
@@ -323,15 +344,8 @@ class ES:
                         perturbation_slices, self._rank % 2 == 0)
 
         # Run objective
-        if self._rank == 0:
-            t = time.time()
-            local_rew = np.empty(1, dtype=np.float32)
-            local_rew[0], roll_obs = objective(self._theta, curr_best=self._running_best_reward)
-            tt = time.time() - t
-            gt = time.time()
-        else:
-            local_rew = np.empty(1, dtype=np.float32)
-            local_rew[0], roll_obs = objective(self._theta, curr_best=self._running_best_reward)
+        local_rew = np.empty(1, dtype=np.float32)
+        local_rew[0], roll_obs = objective(self._theta, curr_best=self._running_best_reward)
 
         # Consolidate return values
         all_rewards = np.empty(self._size, dtype=np.float32)
@@ -348,10 +362,8 @@ class ES:
 
         # update theta and log generation results
         if self._rank == 0:
-            gt = time.time() - gt
-            t = time.time()
             self._update_theta(all_rewards, unmatched_dimension_slices, dimension_slices, perturbation_slices)
-            log(self, "Gen {} | Mean reward: {:.2f}, Best: {}, {:.2f} || Gather: {:.2f}s, Grad update: {:.3f}s, Pol eval: {:.2f}s, Update ratio: {}".format(self._generation_number, np.sum(all_rewards) / self._size, np.argmax(all_rewards), np.max(all_rewards), gt, time.time() - t, tt, self._update_ratios[-1]))
+            log(self, "Gen {} | Mean reward: {:.2f}, Best: {}, {:.2f} || Update ratio: {}".format(self._generation_number, np.sum(all_rewards) / self._size, np.argmax(all_rewards), np.max(all_rewards), self._update_ratios[-1]))
         else:
             self._update_theta(all_rewards, unmatched_dimension_slices, dimension_slices, perturbation_slices)
 

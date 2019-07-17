@@ -105,7 +105,7 @@ class VirtualBatchNorm(nn.Module):
 
 """
 
-modes = ['last_layer', 'cnns_and_last_linear', 'all_except_first_linear', 'all_linear', 'all']
+modes = ['last_layer', 'cnns_and_last_linear', 'all_except_first_linear', 'all_linear', 'all_except_linear', 'all']
 
 
 class Policy(nn.Module):
@@ -293,6 +293,11 @@ class Policy(nn.Module):
                 if not isinstance(m, Policy) and not isinstance(m, nn.Sequential):
                     for p in m.parameters():
                         flat_parameters.append(p.data.view(-1))
+        if self.optimize == 'all_except_linear':
+            for m in self.modules():
+                if not isinstance(m, Policy) and not isinstance(m, nn.Sequential) and not isinstance(m, nn.Linear):
+                    for p in m.parameters():
+                        flat_parameters.append(p.data.view(-1))
         elif self.optimize == 'all_except_first_linear':
             for m in self.conv:
                 for p in m.parameters():
@@ -319,6 +324,13 @@ class Policy(nn.Module):
         if self.optimize == 'all':
             for m in self.modules():
                 if not isinstance(m, Policy) and not isinstance(m, nn.Sequential):
+                    for p in m.parameters():
+                        size = np.prod(p.data.shape)
+                        p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
+                        start += size
+        if self.optimize == 'all_except_linear':
+            for m in self.modules():
+                if not isinstance(m, Policy) and not isinstance(m, nn.Sequential) and not isinstance(m, nn.Linear):
                     for p in m.parameters():
                         size = np.prod(p.data.shape)
                         p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
