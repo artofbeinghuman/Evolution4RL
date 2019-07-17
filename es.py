@@ -138,9 +138,10 @@ class ES:
         self._update_best_flag = False
         log(self, "Optimizing {} out of {} network parameters ({:.2f}%).".format(int(self._theta.size), self.policy.num_parameters, 100 * int(self._theta.size) / self.policy.num_parameters))
         self.optimizer1 = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](self._old_theta, **exp['optimizer']['args'])
-        self.policy.optimize = 'all_except_linear'
+        self.other_optimization_mode = 'all_cnns'
+        self.policy.optimize = self.other_optimization_mode
         self.optimizer2 = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](self.policy.get_flat(), **exp['optimizer']['args'])
-        self.policy.optimize = 'all_linear'
+        self.policy.optimize = self._optimize
         self._update_ratios = []
 
         # User input parameters
@@ -191,6 +192,8 @@ class ES:
             log(self, "Calculated Random Table in {}s.".format(time.time() - t))
             # Fold step-size into noise
             self._rand_num_table *= self._sigma
+
+        print("randtable on worker {} on node {}:".format(self._rank, socket.gethostname()), self._rand_num_table[:5])
 
         self._max_table_step = kwargs.get("max_table_step", 5)
         self._max_param_step = kwargs.get("max_param_step", 1)
@@ -275,29 +278,30 @@ class ES:
         :param num_generations: how many generations it will run for
         :return: None
         """
+        alternate = 2
         t = time.time()
         tt = time.time()
         partial_objective = partial(self.objective, **self.obj_kwargs)
         for i in range(num_generations):
 
             # alternate between optimizing linear, and the rest
-            if self._generation_number % 4 == 0:
-                self.policy.optimize = 'all_linear'
+            if self._generation_number % 2 * alternate == 0:
+                self.policy.optimize = self._optimize
                 self.optimizer = self.optimizer1
                 self._theta = self.optimizer.theta
                 self._old_theta = self.optimizer.theta
                 self._num_parameters = len(self._theta)
                 self._num_mutations = self._num_parameters
-                log(self, "now optimizing all linear layers")
+                log(self, "now optimizing " + self._optimize)
 
-            elif self._generation_number % 4 == 2:
-                self.policy.optimize = 'all_except_linear'
+            elif self._generation_number % 2 * alternate == alternate:
+                self.policy.optimize = self.other_optimization_mode
                 self.optimizer = self.optimizer2
                 self._theta = self.optimizer.theta
                 self._old_theta = self.optimizer.theta
                 self._num_parameters = len(self._theta)
                 self._num_mutations = self._num_parameters
-                log(self, "now optimizing all EXCEPT the linear layers")
+                log(self, "now optimizing " + self.other_optimization_mode)
 
             self._generation_number += 1
             # if self._generation_number % 151 == 0 and self._generation_number > 0:
@@ -347,6 +351,8 @@ class ES:
         # Apply perturbations
         multi_slice_add(self._theta, self._rand_num_table, dimension_slices,
                         perturbation_slices, self._rank % 2 == 0)
+        if self._rank == 100:
+            print("## rand numbers, worker {} on node {}:".format(self._rank, socket.gethostname()), self._rand_num_table[perturbation_slices[0]][:5])
 
         # Run objective
         local_rew = np.empty(1, dtype=np.float32)
@@ -406,6 +412,8 @@ class ES:
                 else:
                     perturbation_slices = self._draw_random_table_slices(self._worker_rngs[rank])
                     dimension_slices, perturbation_slices = match_slices(master_dim_slices, perturbation_slices)
+                    if self._rank == 100:
+                        print("grad rand numbers, worker {} on node {}:".format(self._rank, socket.gethostname()), self._rand_num_table[perturbation_slices[0]][:5])
 
                 # Apply update running best for non-self ranks
                 if parent_num == 0 and self._update_best_flag:
