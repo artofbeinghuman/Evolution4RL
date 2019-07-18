@@ -5,6 +5,7 @@ from policy import Policy, get_ref_batch
 from optimizers import SGD, Adam
 import time
 from evo_utils import *
+from policy import modes as optimization_modes
 
 # Credit goes to Nathaniel Rodriguez from whom I adopted large parts of this code
 # https://github.com/Nathaniel-Rodriguez/evostrat/blob/master/evostrat/evostrat.py
@@ -94,17 +95,6 @@ class ES:
             self._path = ""
         self._path = self._comm.bcast(self._path, root=0)
 
-        # create communication groups which are local to each node.
-        # Later generate random noise table on each node locally via these comm_local
-        local_ip = socket.gethostname()
-        all_ips = self._comm.gather(local_ip, root=0)
-        if self._rank == 0:
-            num = len(all_ips)
-            all_ips = list(set(all_ips))
-            log(self, "{} workers active on {}.".format(num, "{} node".format(len(all_ips)) if len(all_ips) == 1 else "{} nodes".format(len(all_ips))))
-        all_ips = self._comm.bcast(all_ips, root=0)
-        self._comm_local = self._comm.Split(color=all_ips.index(local_ip), key=self._rank)
-
         self._global_seed = kwargs.get('seed', 123)
         torch.manual_seed(self._global_seed)
         self._global_rng = np.random.RandomState(self._global_seed)
@@ -124,24 +114,45 @@ class ES:
         self.env = get_env_from(exp)
         self._ref_batch = get_ref_batch(self.env, batch_size=2**10, p=0.2) if self._rank == 0 else torch.empty([2**10, 4, 84, 84])
         self._ref_batch = self._comm.bcast(self._ref_batch, root=0)
-        self._optimize = kwargs.get('optimize', 'last_layer')
-        self.policy = Policy(self.env.observation_space.shape, self.env.action_space.n, self._ref_batch, self._optimize)
+        self.policy = Policy(self.env.observation_space.shape, self.env.action_space.n, self._ref_batch)
         self._stochastic_activation = kwargs.get('stochastic_activation', False)
         self.policy.stochastic_activation = self._stochastic_activation
 
         # State
-        self._theta = self.policy.get_flat()
-        # print("worker {} on node {}:".format(self._rank, socket.gethostname()), np.sum(self._theta), len(self._theta))
-        self._old_theta = self._theta.copy()
-        self._running_best = self._theta.copy()
-        self._running_best_reward = np.float32(np.finfo(np.float32).min)
         self._update_best_flag = False
-        log(self, "Optimizing {} out of {} network parameters ({:.2f}%).".format(int(self._theta.size), self.policy.num_parameters, 100 * int(self._theta.size) / self.policy.num_parameters))
-        self.optimizer1 = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](self._old_theta, **exp['optimizer']['args'])
-        self.other_optimization_mode = 'all_cnns'
-        self.policy.optimize = self.other_optimization_mode
-        self.optimizer2 = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](self.policy.get_flat(), **exp['optimizer']['args'])
-        self.policy.optimize = self._optimize
+        self._optimize = kwargs.get('optimize', 'last_layer')
+        if len(self._optimize) == 1:
+            self.alternating_opt = False
+            self.policy.optimize = optimization_modes[self._optimize[0]]
+            self._theta = self.policy.get_flat()
+            self._old_theta = self._theta.copy()
+            self._running_best = self._theta.copy()
+            self._running_best_reward = np.float32(np.finfo(np.float32).min)
+            self.optimizer = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](self._old_theta, **exp['optimizer']['args'])
+            log(self, "Optimizing {} out of {} network parameters ({:.2f}%).".format(int(self._theta.size), self.policy.num_parameters, 100 * int(self._theta.size) / self.policy.num_parameters))
+        elif len(self._optimize) == 2:
+            self.alternating_opt = True
+            self.other_optimization_mode = optimization_modes[self._optimize[1]]  # 'all_cnns'
+            self._optimize = optimization_modes[self._optimize[0]]
+            self.optimizer1 = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](self._old_theta, **exp['optimizer']['args'])
+            self.policy.optimize = self.other_optimization_mode
+            self.optimizer2 = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](self.policy.get_flat(), **exp['optimizer']['args'])
+            self._running_best2 = self.policy.get_flat().copy()
+
+            # now get the real running best, which encompasses both optimization modes, i.e. just all Policy parameters
+            self.policy.optimize = 'all'
+            self._running_best_all = self.policy.get_flat().copy()
+
+            self.policy.optimize = self._optimize
+            self._theta = self.policy.get_flat()
+            self._old_theta = self._theta.copy()
+            self._running_best1 = self._theta.copy()
+            self._running_best_reward = np.float32(np.finfo(np.float32).min)
+            log(self, "alternating between {} and {}".format(self._optimize, self.other_optimization_mode))
+        else:
+            log(self, "Supplied to many policy optimization modes. Exiting.")
+            exit()
+
         self._update_ratios = []
 
         # User input parameters
@@ -152,7 +163,8 @@ class ES:
         self.obj_kwargs = {'env': self.env, 'timestep_limit': timestep_limit, 'max_runs': max_runs, 'rank': self._rank, 'render': render}
         self._sigma = np.float32(kwargs.get('sigma', 0.05))  # this is the noise_stdev parameter from Uber json-configs
         self._num_parameters = len(self._theta)
-        self._num_mutations = int(self._num_parameters / kwargs.get('mutate', 1))  # limited perturbartion ES as in Zhang et al 2017, ch.4.1
+        self._mutate = kwargs.get('mutate', 1)
+        self._num_mutations = int(self._num_parameters / self._mutate)  # limited perturbartion ES as in Zhang et al 2017, ch.4.1
         self._OpenAIES = not kwargs.get('classic_es', True)
         self._video = not kwargs.get('no_videos', True)
 
@@ -178,9 +190,19 @@ class ES:
             self._weights.astype(np.float32, copy=False)
             self._update_ratios = ['-']
 
-        # int(5 * 10**8)
+        # create communication groups which are local to each node.
+        # Later generate random noise table on each node locally via these comm_local
+        local_ip = socket.gethostname()
+        all_ips = self._comm.gather(local_ip, root=0)
+        if self._rank == 0:
+            num = len(all_ips)
+            all_ips = list(set(all_ips))
+            log(self, "{} workers active on {}.".format(num, "{} node".format(len(all_ips)) if len(all_ips) == 1 else "{} nodes".format(len(all_ips))))
+        all_ips = self._comm.bcast(all_ips, root=0)
+        self._comm_local = self._comm.Split(color=all_ips.index(local_ip), key=self._rank)
+
         self._rand_num_table_size = kwargs.get("rand_num_table_size", 200000)  # 250000000 ~ 1GB of noise
-        nbytes = self._rand_num_table_size * MPI.FLOAT.Get_size() if self._rank == 0 else 0
+        nbytes = self._rand_num_table_size * MPI.FLOAT.Get_size()
         win = MPI.Win.Allocate_shared(nbytes, MPI.FLOAT.Get_size(), comm=self._comm_local)
         buf, itemsize = win.Shared_query(0)
         assert itemsize == MPI.FLOAT.Get_size()
@@ -193,13 +215,11 @@ class ES:
             # Fold step-size into noise
             self._rand_num_table *= self._sigma
 
-        print("randtable on worker {} on node {}:".format(self._rank, socket.gethostname()), self._rand_num_table[:5])
-
         self._max_table_step = kwargs.get("max_table_step", 5)
         self._max_param_step = kwargs.get("max_param_step", 1)
 
-        # print("{}: I am at the barrier!".format(self._rank))
         self._comm.Barrier()
+        # print("randtable on worker {} on node {}:".format(self._rank, socket.gethostname()), self._rand_num_table[:5])
 
     def __getstate__(self):
 
@@ -284,24 +304,27 @@ class ES:
         partial_objective = partial(self.objective, **self.obj_kwargs)
         for i in range(num_generations):
 
-            # alternate between optimizing linear, and the rest
-            if self._generation_number % 2 * alternate == 0:
-                self.policy.optimize = self._optimize
-                self.optimizer = self.optimizer1
-                self._theta = self.optimizer.theta
-                self._old_theta = self.optimizer.theta
-                self._num_parameters = len(self._theta)
-                self._num_mutations = self._num_parameters
-                log(self, "now optimizing " + self._optimize)
+            if self.alternating_opt:
+                assert False, "Still need to implement _running_best update mechanism for alternating mode"
 
-            elif self._generation_number % 2 * alternate == alternate:
-                self.policy.optimize = self.other_optimization_mode
-                self.optimizer = self.optimizer2
-                self._theta = self.optimizer.theta
-                self._old_theta = self.optimizer.theta
-                self._num_parameters = len(self._theta)
-                self._num_mutations = self._num_parameters
-                log(self, "now optimizing " + self.other_optimization_mode)
+                # alternate between optimizing linear, and the rest
+                if self._generation_number % 2 * alternate == 0:
+                    self.policy.optimize = self._optimize
+                    self.optimizer = self.optimizer1
+                    self._theta = self.optimizer.theta
+                    self._old_theta = self.optimizer.theta
+                    self._num_parameters = len(self._theta)
+                    self._num_mutations = int(self._num_parameters / self._mutate)
+                    log(self, "now optimizing " + self._optimize)
+
+                elif self._generation_number % 2 * alternate == alternate:
+                    self.policy.optimize = self.other_optimization_mode
+                    self.optimizer = self.optimizer2
+                    self._theta = self.optimizer.theta
+                    self._old_theta = self.optimizer.theta
+                    self._num_parameters = len(self._theta)
+                    self._num_mutations = int(self._num_parameters / self._mutate)
+                    log(self, "now optimizing " + self.other_optimization_mode)
 
             self._generation_number += 1
             # if self._generation_number % 151 == 0 and self._generation_number > 0:
