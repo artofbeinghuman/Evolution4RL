@@ -103,6 +103,32 @@ class VirtualBatchNorm(nn.Module):
                                  nn.Linear(in_features=64, out_features=output_shape))
 
 
+Deepmind 2015 Architecture (+VirtualBatchNorm)
+
+        conv1_out = conv_output(input_shape[-2], 8, 4)
+        conv2_out = conv_output(conv1_out, 4, 2)
+        conv3_out = conv_output(conv2_out, 3, 1)
+        self.conv = nn.Sequential(nn.Conv2d(in_channels=input_shape[-1], out_channels=32,
+                                            kernel_size=8, stride=4, bias=False),
+                                  VirtualBatchNorm(input_shape=[32, conv1_out, conv1_out]),
+                                  nn.ReLU(),
+                                  nn.Conv2d(in_channels=32, out_channels=64,
+                                            kernel_size=4, stride=2, bias=False),
+                                  VirtualBatchNorm(input_shape=[64, conv2_out, conv2_out]),
+                                  nn.ReLU(),
+                                  nn.Conv2d(in_channels=64, out_channels=64,
+                                            kernel_size=3, stride=1, bias=False),
+                                  VirtualBatchNorm(input_shape=[64, conv3_out, conv3_out]),
+                                  nn.ReLU())
+
+        self.lin_dim = (conv3_out)**2 * 64
+
+        self.mlp = nn.Sequential(nn.Linear(in_features=self.lin_dim, out_features=512, bias=False),
+                                 VirtualBatchNorm(input_shape=[512]),
+                                 nn.ReLU(),
+                                 nn.Linear(in_features=512, out_features=output_shape))
+
+
 """
 
 modes = ['last_layer', 'cnns_and_last_linear', 'all_except_first_linear', 'all_linear', 'all_except_linear', 'all_cnns', 'all_except_VBN', 'all_except_cnns', 'all']
