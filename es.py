@@ -6,6 +6,7 @@ from optimizers import SGD, Adam
 import time
 from evo_utils import *
 from policy import modes as optimization_modes
+import socket
 
 # Credit goes to Nathaniel Rodriguez from whom I adopted large parts of this code
 # https://github.com/Nathaniel-Rodriguez/evostrat/blob/master/evostrat/evostrat.py
@@ -150,7 +151,7 @@ class ES:
             self._running_best_reward = np.float32(np.finfo(np.float32).min)
             log(self, "alternating between {} and {}".format(self._optimize, self.other_optimization_mode))
         else:
-            log(self, "Supplied to many policy optimization modes. Exiting.")
+            log(self, "Supplied too many policy optimization modes. Exiting.")
             exit()
 
         self._update_ratios = []
@@ -303,6 +304,7 @@ class ES:
         tt = time.time()
         partial_objective = partial(self.objective, **self.obj_kwargs)
         for i in range(num_generations):
+            self._comm.Barrier()
 
             if self.alternating_opt:
                 assert False, "Still need to implement _running_best update mechanism for alternating mode"
@@ -374,8 +376,8 @@ class ES:
         # Apply perturbations
         multi_slice_add(self._theta, self._rand_num_table, dimension_slices,
                         perturbation_slices, self._rank % 2 == 0)
-        if self._rank == 100:
-            print("## rand numbers, worker {} on node {}:".format(self._rank, socket.gethostname()), self._rand_num_table[perturbation_slices[0]][:5])
+        # if self._rank == 100:
+        #     print("## rand numbers, worker {} on node {}:".format(self._rank, socket.gethostname()), self._rand_num_table[perturbation_slices[0]][:5])
 
         # Run objective
         local_rew = np.empty(1, dtype=np.float32)
@@ -400,8 +402,6 @@ class ES:
             log(self, "Gen {} | Mean reward: {:.2f}, Best: {}, {:.2f} || Update ratio: {}".format(self._generation_number, np.sum(all_rewards) / self._size, np.argmax(all_rewards), np.max(all_rewards), self._update_ratios[-1]))
         else:
             self._update_theta(all_rewards, unmatched_dimension_slices, dimension_slices, perturbation_slices)
-
-        self._comm.Barrier()
 
     def _update_theta(self, all_rewards, master_dim_slices, local_dim_slices,
                       local_perturbation_slices):
@@ -435,8 +435,8 @@ class ES:
                 else:
                     perturbation_slices = self._draw_random_table_slices(self._worker_rngs[rank])
                     dimension_slices, perturbation_slices = match_slices(master_dim_slices, perturbation_slices)
-                    if self._rank == 100:
-                        print("grad rand numbers, worker {} on node {}:".format(self._rank, socket.gethostname()), self._rand_num_table[perturbation_slices[0]][:5])
+                    # if rank == 100:
+                    #     print("grad rand numbers, worker {} on node {}:".format(self._rank, socket.gethostname()), self._rand_num_table[perturbation_slices[0]][:5])
 
                 # Apply update running best for non-self ranks
                 if parent_num == 0 and self._update_best_flag:
@@ -460,6 +460,8 @@ class ES:
             ur, self._old_theta = self.optimizer.update(g)
             self._update_ratios.append(ur)
             multi_slice_assign(self._theta, self._old_theta, master_dim_slices, master_dim_slices)
+            if self._rank % 96 < 2:
+                print("theta summed for worker {} on node {}:".format(self._rank, socket.gethostname()), np.sum(self._theta))
         else:  # old routine without optimizer, here g is already the new theta
             multi_slice_assign(self._theta, g, master_dim_slices, master_dim_slices)
 

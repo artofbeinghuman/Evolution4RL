@@ -16,7 +16,7 @@
   "optimizer": {
     "args": {
       "stepsize": 0.01,
-      "l2coeff": 0.005
+      "l2coeff": 0.01
     },
     "type": "adam"
   },

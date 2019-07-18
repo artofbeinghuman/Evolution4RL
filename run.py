@@ -45,7 +45,7 @@ def es(game, render, config, generations, sigma, seed, random_noise_size, classi
 
     worker = ES(config, rand_num_table_size=random_noise_size, sigma=sigma, seed=seed, render=render, verbose=True, log_path=path, initial_text=txt, classic_es=classic_es, stochastic_activation=stochastic_activation, gain=gain, optimize=optimize, mutate=mutate, no_videos=no_videos)
     worker(generations)
-    # worker.save(path + '.es')
+    worker.save(path + '.es')
 
 
 if __name__ == '__main__':
