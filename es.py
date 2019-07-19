@@ -180,7 +180,7 @@ class ES:
         self._comm_local = self._comm.Split(color=all_ips.index(local_ip), key=self._rank)
 
         self._rand_num_table_size = kwargs.get("rand_num_table_size", 200000)  # 250000000 ~ 1GB of noise
-        nbytes = self._rand_num_table_size * MPI.FLOAT.Get_size()
+        nbytes = self._rand_num_table_size * MPI.FLOAT.Get_size() if self._comm_local.rank == 0 else 0
         win = MPI.Win.Allocate_shared(nbytes, MPI.FLOAT.Get_size(), comm=self._comm_local)
         buf, itemsize = win.Shared_query(0)
         assert itemsize == MPI.FLOAT.Get_size()
@@ -197,7 +197,9 @@ class ES:
         self._max_param_step = kwargs.get("max_param_step", 1)
 
         self._comm.Barrier()
-        # print("randtable on worker {} on node {}:".format(self._rank, socket.gethostname()), self._rand_num_table[:5])
+        if self._rank % 96 < 2:
+            print("## randtable on worker {} on node {}:".format(self._rank, socket.gethostname()), self._rand_num_table[:5])
+        self._comm.Barrier()
 
     def __getstate__(self):
 
@@ -379,7 +381,6 @@ class ES:
                     self._update_best_flag = True
                     self._running_best_reward = all_rewards[rank]
                     log(self, "## New running best: {:.2f} ##".format(self._running_best_reward))
-                    # Since the best is always first, copy theta elements
                     self._running_best[:] = self._old_theta.copy()  # unperturbed theta
 
                 if rank == self._rank:
@@ -392,7 +393,7 @@ class ES:
                     # if rank == 100:
                     #     print("grad rand numbers, worker {} on node {}:".format(self._rank, socket.gethostname()), self._rand_num_table[perturbation_slices[0]][:5])
 
-                # Apply update running best for non-self ranks
+                # Apply update running best
                 if parent_num == 0 and self._update_best_flag:
                     multi_slice_add(self._running_best, self._rand_num_table,
                                     dimension_slices, perturbation_slices, rank % 2 == 0)
