@@ -285,8 +285,10 @@ class ES:
         for i in range(num_generations):
             self._comm.Barrier()
             self._generation_number += 1
-            self.policy.set_from_flat(self._theta)
-            self._theta = self.policy.get_flat()  # such that new random slice of CNN is drawn
+
+            # self.policy.set_from_flat(self._theta)
+            # self._theta = self.policy.get_flat()  # such that new random slice of CNN is drawn
+
             log(self, "Optimizing index {} of CNN parameters".format(self.policy.slices))
             # if self._generation_number % 151 == 0 and self._generation_number > 0:
             #     self._weights *= np.array([self._sigma], dtype=np.float32)

@@ -359,16 +359,16 @@ class Policy(nn.Module):
                     for p in m.parameters():
                         flat_parameters.append(p.data.view(-1))
             # only return 1/500 of the CNN parameters
-            conv_parameters = []
-            for m in self.modules():
-                if isinstance(m, nn.Conv2d):
-                    for p in m.parameters():
-                        conv_parameters.append(p.data.view(-1))
-            conv_parameters = np.concatenate(conv_parameters)
-            # self.slices = random_slices(self.rng, len(conv_parameters), int(len(conv_parameters) / 500), 1)
-            # flat_parameters.append(conv_parameters[tuple(self.slices)])
-            self.slices = self.rng.randint(len(conv_parameters))
-            flat_parameters.append(np.array([conv_parameters[self.slices]], dtype=np.float32))
+            # conv_parameters = []
+            # for m in self.modules():
+            #     if isinstance(m, nn.Conv2d):
+            #         for p in m.parameters():
+            #             conv_parameters.append(p.data.view(-1))
+            # conv_parameters = np.concatenate(conv_parameters)
+            # # self.slices = random_slices(self.rng, len(conv_parameters), int(len(conv_parameters) / 500), 1)
+            # # flat_parameters.append(conv_parameters[tuple(self.slices)])
+            # self.slices = self.rng.randint(len(conv_parameters))
+            # flat_parameters.append(np.array([conv_parameters[self.slices]], dtype=np.float32))
 
         elif self.optimize == 'all_except_linear':
             for m in self.modules():
@@ -429,26 +429,26 @@ class Policy(nn.Module):
                         p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
                         start += size
             # set the 1/500 of the CNN parameters, which have been returned earlier
-            conv_parameters = []
-            for m in self.modules():
-                if isinstance(m, nn.Conv2d):
-                    for p in m.parameters():
-                        conv_parameters.append(p.data.view(-1))
-            conv_parameters = np.concatenate(conv_parameters)
-            # size = [s.indices(len(conv_parameters)) for s in self.slices]
-            # size = int(np.sum([(s[1] - s[0]) / s[2] for s in size]))
-            size = 1
-            # add flat parameters to the flattened CNN parameters at the position of slices
-            # conv_parameters[tuple(self.slices)] = flat_parameters[start:start + size]
-            conv_parameters[self.slices] = flat_parameters[start:start + size]
-            # set the now changed conv_parameters to the actual network weights (to make sure)
-            start = 0
-            for m in self.modules():
-                if isinstance(m, nn.Conv2d):
-                    for p in m.parameters():
-                        size = np.prod(p.data.shape)
-                        p.data = torch.tensor(conv_parameters[start:start + size]).view(p.data.shape)
-                        start += size
+            # conv_parameters = []
+            # for m in self.modules():
+            #     if isinstance(m, nn.Conv2d):
+            #         for p in m.parameters():
+            #             conv_parameters.append(p.data.view(-1))
+            # conv_parameters = np.concatenate(conv_parameters)
+            # # size = [s.indices(len(conv_parameters)) for s in self.slices]
+            # # size = int(np.sum([(s[1] - s[0]) / s[2] for s in size]))
+            # size = 1
+            # # add flat parameters to the flattened CNN parameters at the position of slices
+            # # conv_parameters[tuple(self.slices)] = flat_parameters[start:start + size]
+            # conv_parameters[self.slices] = flat_parameters[start:start + size]
+            # # set the now changed conv_parameters to the actual network weights (to make sure)
+            # start = 0
+            # for m in self.modules():
+            #     if isinstance(m, nn.Conv2d):
+            #         for p in m.parameters():
+            #             size = np.prod(p.data.shape)
+            #             p.data = torch.tensor(conv_parameters[start:start + size]).view(p.data.shape)
+            #             start += size
 
         elif self.optimize == 'all_except_linear':
             for m in self.modules():
