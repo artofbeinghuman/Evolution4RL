@@ -291,6 +291,7 @@ class ES:
             #     self._sigma /= 5  # np.sqrt(10)
             #     self._weights /= np.array([self._sigma], dtype=np.float32)
             #     self._rand_num_table *= self._sigma
+
             self._update(partial_objective)
             log(self, "Gen {} took {}s.".format(self._generation_number, time.time() - t))
             t = time.time()
@@ -322,7 +323,7 @@ class ES:
 
     def _update(self, objective):
 
-        # Perturb centroid
+        # find slices in noise table and in parameters
         unmatched_dimension_slices = self._draw_random_parameter_slices(self._global_rng)
         unmatched_perturbation_slices = self._draw_random_table_slices(self._worker_rngs[self._rank])
 
@@ -415,8 +416,8 @@ class ES:
             ur, self._old_theta = self.optimizer.update(g)
             self._update_ratios.append(ur)
             multi_slice_assign(self._theta, self._old_theta, master_dim_slices, master_dim_slices)
-            if self._rank % 96 < 2:
-                print("theta summed for worker {} on node {}:".format(self._rank, socket.gethostname()), np.sum(self._theta))
+            # if self._rank % 96 < 2:
+            #     print("theta summed for worker {} on node {}:".format(self._rank, socket.gethostname()), np.sum(self._theta))
         else:  # old routine without optimizer, here g is already the new theta
             multi_slice_assign(self._theta, g, master_dim_slices, master_dim_slices)
 

@@ -1,11 +1,12 @@
 import numpy as np
 import torch
 import torch.nn as nn
-import json
-
+from evo_utils import random_slices
 
 # for virtual batch normalization, we need to sample a batch of (random) observations over which we calculate the parameters
 # for batch normalization, which will then be held fixed when appling batchnorm to the actual policy evaluation/agent run.
+
+
 def get_ref_batch(env, batch_size=128, p=0.05):
     """
     Performs random actions in <env> and adds the subsequent observations with
@@ -141,6 +142,9 @@ class Policy(nn.Module):
         self.stochastic_activation = True
         self.gain = 1.0
         self.optimize = 'last_layer'
+
+        self.rng = np.random.RandomState(0)
+        self.slices = None
 
         def conv_output(width, kernel, stride, padding=0):
             return int((width - kernel + 2 * padding) // stride + 1)
@@ -281,6 +285,12 @@ class Policy(nn.Module):
                         t, rewards = 0, 0
                         obs = env.reset()
                         break
+                    elif t >= 5000:
+                        all_rews.append(rewards)
+                        print("Stopped rollout after {} game steps with reward {}.".format(t, rewards))
+                        t, rewards = 0, 0
+                        obs = env.reset()
+                        break
         else:
             try:
                 import time
@@ -343,9 +353,19 @@ class Policy(nn.Module):
         flat_parameters = []
         if self.optimize == 'all':
             for m in self.modules():
-                if not isinstance(m, Policy) and not isinstance(m, nn.Sequential):
+                if not isinstance(m, Policy) and not isinstance(m, nn.Sequential) and not isinstance(m, nn.Conv2d):
                     for p in m.parameters():
                         flat_parameters.append(p.data.view(-1))
+            # only return 1/500 of the CNN parameters
+            conv_parameters = []
+            for m in self.modules():
+                if isinstance(m, nn.Conv2d):
+                    for p in m.parameters():
+                        conv_parameters.append(p.data.view(-1))
+            conv_parameters = np.concatenate(conv_parameters)
+            self.slices = random_slices(self.rng, len(conv_parameters), int(len(conv_parameters) / 500), 1)
+            flat_parameters.append(conv_parameters[tuple(self.slices)])
+
         elif self.optimize == 'all_except_linear':
             for m in self.modules():
                 if not isinstance(m, Policy) and not isinstance(m, nn.Sequential) and not isinstance(m, nn.Linear):
@@ -399,11 +419,31 @@ class Policy(nn.Module):
         start = 0
         if self.optimize == 'all':
             for m in self.modules():
-                if not isinstance(m, Policy) and not isinstance(m, nn.Sequential):
+                if not isinstance(m, Policy) and not isinstance(m, nn.Sequential) and not isinstance(m, nn.Conv2d):
                     for p in m.parameters():
                         size = np.prod(p.data.shape)
                         p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
                         start += size
+            # set the 1/500 of the CNN parameters, which have been returned earlier
+            conv_parameters = []
+            for m in self.modules():
+                if isinstance(m, nn.Conv2d):
+                    for p in m.parameters():
+                        conv_parameters.append(p.data.view(-1))
+            conv_parameters = np.concatenate(conv_parameters)
+            size = [s.indices(len(conv_parameters)) for s in self.slices]
+            size = int(np.sum([(s[1] - s[0]) / s[2] for s in size]))
+            # add flat parameters to the flattened CNN parameters at the position of slices
+            conv_parameters[tuple(self.slices)] = flat_parameters[start:start + size]
+            # set the now changed conv_parameters to the actual network weights (to make sure)
+            start = 0
+            for m in self.modules():
+                if isinstance(m, nn.Conv2d):
+                    for p in m.parameters():
+                        size = np.prod(p.data.shape)
+                        p.data = torch.tensor(conv_parameters[start:start + size]).view(p.data.shape)
+                        start += size
+
         elif self.optimize == 'all_except_linear':
             for m in self.modules():
                 if not isinstance(m, Policy) and not isinstance(m, nn.Sequential) and not isinstance(m, nn.Linear):
