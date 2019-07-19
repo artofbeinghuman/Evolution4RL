@@ -115,44 +115,21 @@ class ES:
         self.env = get_env_from(exp)
         self._ref_batch = get_ref_batch(self.env, batch_size=2**10, p=0.2) if self._rank == 0 else torch.empty([2**10, 4, 84, 84])
         self._ref_batch = self._comm.bcast(self._ref_batch, root=0)
-        self.policy = Policy(self.env.observation_space.shape, self.env.action_space.n, self._ref_batch)
+        self._big_net = kwargs.get('big_net', False)
+        self.policy = Policy(self.env.observation_space.shape, self.env.action_space.n, ref_batch=self._ref_batch, big_net=self._big_net)
         self._stochastic_activation = kwargs.get('stochastic_activation', False)
         self.policy.stochastic_activation = self._stochastic_activation
+        self._optimize = kwargs.get('optimize', 'last_layer')
+        self.policy.optimize = self._optimize
 
         # State
         self._update_best_flag = False
-        self._optimize = kwargs.get('optimize', 'last_layer')
-        if len(self._optimize) == 1:
-            self.alternating_opt = False
-            self.policy.optimize = optimization_modes[self._optimize[0]]
-            self._theta = self.policy.get_flat()
-            self._old_theta = self._theta.copy()
-            self._running_best = self._theta.copy()
-            self._running_best_reward = np.float32(np.finfo(np.float32).min)
-            self.optimizer = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](self._old_theta, **exp['optimizer']['args'])
-            log(self, "Optimizing {} out of {} network parameters ({:.2f}%).".format(int(self._theta.size), self.policy.num_parameters, 100 * int(self._theta.size) / self.policy.num_parameters))
-        elif len(self._optimize) == 2:
-            self.alternating_opt = True
-            self.other_optimization_mode = optimization_modes[self._optimize[1]]  # 'all_cnns'
-            self._optimize = optimization_modes[self._optimize[0]]
-            self.optimizer1 = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](self._old_theta, **exp['optimizer']['args'])
-            self.policy.optimize = self.other_optimization_mode
-            self.optimizer2 = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](self.policy.get_flat(), **exp['optimizer']['args'])
-            self._running_best2 = self.policy.get_flat().copy()
-
-            # now get the real running best, which encompasses both optimization modes, i.e. just all Policy parameters
-            self.policy.optimize = 'all'
-            self._running_best_all = self.policy.get_flat().copy()
-
-            self.policy.optimize = self._optimize
-            self._theta = self.policy.get_flat()
-            self._old_theta = self._theta.copy()
-            self._running_best1 = self._theta.copy()
-            self._running_best_reward = np.float32(np.finfo(np.float32).min)
-            log(self, "alternating between {} and {}".format(self._optimize, self.other_optimization_mode))
-        else:
-            log(self, "Supplied too many policy optimization modes. Exiting.")
-            exit()
+        self._theta = self.policy.get_flat()
+        self._old_theta = self._theta.copy()
+        self._running_best = self._theta.copy()
+        self._running_best_reward = np.float32(np.finfo(np.float32).min)
+        self.optimizer = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](self._old_theta, **exp['optimizer']['args'])
+        log(self, "Optimizing {} out of {} network parameters ({:.2f}%).".format(int(self._theta.size), self.policy.num_parameters, 100 * int(self._theta.size) / self.policy.num_parameters))
 
         self._update_ratios = []
 
@@ -231,6 +208,7 @@ class ES:
                  "_path": self._path,
                  "_optimize": self._optimize,
                  "_noise_seed": self._noise_seed,
+                 "_big_net": self._big_net,
                  "_stochastic_activation": self._stochastic_activation,
                  "optimizer": self.optimizer,
                  "_OpenAIES": self._OpenAIES,
@@ -299,35 +277,11 @@ class ES:
         :param num_generations: how many generations it will run for
         :return: None
         """
-        alternate = 2
         t = time.time()
         tt = time.time()
         partial_objective = partial(self.objective, **self.obj_kwargs)
         for i in range(num_generations):
             self._comm.Barrier()
-
-            if self.alternating_opt:
-                assert False, "Still need to implement _running_best update mechanism for alternating mode"
-
-                # alternate between optimizing linear, and the rest
-                if self._generation_number % 2 * alternate == 0:
-                    self.policy.optimize = self._optimize
-                    self.optimizer = self.optimizer1
-                    self._theta = self.optimizer.theta
-                    self._old_theta = self.optimizer.theta
-                    self._num_parameters = len(self._theta)
-                    self._num_mutations = int(self._num_parameters / self._mutate)
-                    log(self, "now optimizing " + self._optimize)
-
-                elif self._generation_number % 2 * alternate == alternate:
-                    self.policy.optimize = self.other_optimization_mode
-                    self.optimizer = self.optimizer2
-                    self._theta = self.optimizer.theta
-                    self._old_theta = self.optimizer.theta
-                    self._num_parameters = len(self._theta)
-                    self._num_mutations = int(self._num_parameters / self._mutate)
-                    log(self, "now optimizing " + self.other_optimization_mode)
-
             self._generation_number += 1
             # if self._generation_number % 151 == 0 and self._generation_number > 0:
             #     self._weights *= np.array([self._sigma], dtype=np.float32)

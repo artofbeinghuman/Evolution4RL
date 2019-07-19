@@ -135,7 +135,7 @@ modes = ['last_layer', 'cnns_and_last_linear', 'all_except_first_linear', 'all_l
 
 
 class Policy(nn.Module):
-    def __init__(self, input_shape, output_shape, ref_batch=None):
+    def __init__(self, input_shape, output_shape, ref_batch=None, big_net=False):
         super(Policy, self).__init__()
 
         self.stochastic_activation = True
@@ -145,23 +145,50 @@ class Policy(nn.Module):
         def conv_output(width, kernel, stride, padding=0):
             return int((width - kernel + 2 * padding) // stride + 1)
 
-        conv1_out = conv_output(input_shape[-2], 8, 4)
-        conv2_out = conv_output(conv1_out, 4, 2)
-        self.conv = nn.Sequential(nn.Conv2d(in_channels=input_shape[-1], out_channels=16,
-                                            kernel_size=8, stride=4, bias=False),
-                                  VirtualBatchNorm(input_shape=[16, conv1_out, conv1_out]),
-                                  nn.ReLU(),
-                                  nn.Conv2d(in_channels=16, out_channels=32,
-                                            kernel_size=4, stride=2, bias=False),
-                                  VirtualBatchNorm(input_shape=[32, conv2_out, conv2_out]),
-                                  nn.ReLU())
+        if big_net:  # Deepmind 2015 Architecture (+VirtualBatchNorm+one additional linear layer)
+            conv1_out = conv_output(input_shape[-2], 8, 4)
+            conv2_out = conv_output(conv1_out, 4, 2)
+            conv3_out = conv_output(conv2_out, 3, 1)
+            self.conv = nn.Sequential(nn.Conv2d(in_channels=input_shape[-1], out_channels=32,
+                                                kernel_size=8, stride=4, bias=False),
+                                      VirtualBatchNorm(input_shape=[32, conv1_out, conv1_out]),
+                                      nn.ReLU(),
+                                      nn.Conv2d(in_channels=32, out_channels=64,
+                                                kernel_size=4, stride=2, bias=False),
+                                      VirtualBatchNorm(input_shape=[64, conv2_out, conv2_out]),
+                                      nn.ReLU(),
+                                      nn.Conv2d(in_channels=64, out_channels=64,
+                                                kernel_size=3, stride=1, bias=False),
+                                      VirtualBatchNorm(input_shape=[64, conv3_out, conv3_out]),
+                                      nn.ReLU())
 
-        self.lin_dim = (conv2_out)**2 * 32
+            self.lin_dim = (conv3_out)**2 * 64
 
-        self.mlp = nn.Sequential(nn.Linear(in_features=self.lin_dim, out_features=256, bias=False),
-                                 VirtualBatchNorm(input_shape=[256]),
-                                 nn.ReLU(),
-                                 nn.Linear(in_features=256, out_features=output_shape))
+            self.mlp = nn.Sequential(nn.Linear(in_features=self.lin_dim, out_features=512, bias=False),
+                                     VirtualBatchNorm(input_shape=[512]),
+                                     nn.ReLU(),
+                                     nn.Linear(in_features=512, out_features=256, bias=False),
+                                     VirtualBatchNorm(input_shape=[256]),
+                                     nn.ReLU(),
+                                     nn.Linear(in_features=256, out_features=output_shape))
+        else:
+            conv1_out = conv_output(input_shape[-2], 8, 4)
+            conv2_out = conv_output(conv1_out, 4, 2)
+            self.conv = nn.Sequential(nn.Conv2d(in_channels=input_shape[-1], out_channels=16,
+                                                kernel_size=8, stride=4, bias=False),
+                                      VirtualBatchNorm(input_shape=[16, conv1_out, conv1_out]),
+                                      nn.ReLU(),
+                                      nn.Conv2d(in_channels=16, out_channels=32,
+                                                kernel_size=4, stride=2, bias=False),
+                                      VirtualBatchNorm(input_shape=[32, conv2_out, conv2_out]),
+                                      nn.ReLU())
+
+            self.lin_dim = (conv2_out)**2 * 32
+
+            self.mlp = nn.Sequential(nn.Linear(in_features=self.lin_dim, out_features=256, bias=False),
+                                     VirtualBatchNorm(input_shape=[256]),
+                                     nn.ReLU(),
+                                     nn.Linear(in_features=256, out_features=output_shape))
 
         self.apply(self.initialise_parameters)
         self.initialise_VBN(ref_batch)
@@ -319,17 +346,17 @@ class Policy(nn.Module):
                 if not isinstance(m, Policy) and not isinstance(m, nn.Sequential):
                     for p in m.parameters():
                         flat_parameters.append(p.data.view(-1))
-        if self.optimize == 'all_except_linear':
+        elif self.optimize == 'all_except_linear':
             for m in self.modules():
                 if not isinstance(m, Policy) and not isinstance(m, nn.Sequential) and not isinstance(m, nn.Linear):
                     for p in m.parameters():
                         flat_parameters.append(p.data.view(-1))
-        if self.optimize == 'all_except_VBN':
+        elif self.optimize == 'all_except_VBN':
             for m in self.modules():
                 if not isinstance(m, Policy) and not isinstance(m, nn.Sequential) and not isinstance(m, VirtualBatchNorm):
                     for p in m.parameters():
                         flat_parameters.append(p.data.view(-1))
-        if self.optimize == 'all_except_cnns':
+        elif self.optimize == 'all_except_cnns':
             for m in self.modules():
                 if not isinstance(m, Policy) and not isinstance(m, nn.Sequential) and not isinstance(m, nn.Conv2d):
                     for p in m.parameters():
@@ -342,20 +369,29 @@ class Policy(nn.Module):
                 for p in m.parameters():
                     flat_parameters.append(p.data.view(-1))
         elif self.optimize == 'all_cnns':
-            for m in [self.conv[0], self.conv[3]]:
-                for p in m.parameters():
-                    flat_parameters.append(p.data.view(-1))
+            for m in self.modules():
+                if isinstance(m, nn.Conv2d):
+                    for p in m.parameters():
+                        flat_parameters.append(p.data.view(-1))
         elif self.optimize == 'cnns_and_last_linear':
-            for m in [self.conv[0], self.conv[3], self.mlp[3]]:
-                for p in m.parameters():
-                    flat_parameters.append(p.data.view(-1))
-        elif self.optimize == 'all_linear':
-            for m in [self.mlp[0], self.mlp[3]]:
-                for p in m.parameters():
-                    flat_parameters.append(p.data.view(-1))
-        elif self.optimize == 'last_layer':
-            for p in self.mlp[3].parameters():
+            for m in self.modules():
+                if isinstance(m, nn.Conv2d):
+                    for p in m.parameters():
+                        flat_parameters.append(p.data.view(-1))
+            m = self.mlp[-1]
+            for p in m.parameters():
                 flat_parameters.append(p.data.view(-1))
+        elif self.optimize == 'all_linear':
+            for m in self.modules():
+                if isinstance(m, nn.Linear):
+                    for p in m.parameters():
+                        flat_parameters.append(p.data.view(-1))
+        elif self.optimize == 'last_layer':
+            m = self.mlp[-1]
+            for p in m.parameters():
+                flat_parameters.append(p.data.view(-1))
+        else:
+            print("{} is not an allowed policy optimization mode!".format(self.optimize))
 
         return np.concatenate(flat_parameters)
 
@@ -368,21 +404,21 @@ class Policy(nn.Module):
                         size = np.prod(p.data.shape)
                         p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
                         start += size
-        if self.optimize == 'all_except_linear':
+        elif self.optimize == 'all_except_linear':
             for m in self.modules():
                 if not isinstance(m, Policy) and not isinstance(m, nn.Sequential) and not isinstance(m, nn.Linear):
                     for p in m.parameters():
                         size = np.prod(p.data.shape)
                         p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
                         start += size
-        if self.optimize == 'all_except_VBN':
+        elif self.optimize == 'all_except_VBN':
             for m in self.modules():
                 if not isinstance(m, Policy) and not isinstance(m, nn.Sequential) and not isinstance(m, VirtualBatchNorm):
                     for p in m.parameters():
                         size = np.prod(p.data.shape)
                         p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
                         start += size
-        if self.optimize == 'all_except_cnns':
+        elif self.optimize == 'all_except_cnns':
             for m in self.modules():
                 if not isinstance(m, Policy) and not isinstance(m, nn.Sequential) and not isinstance(m, nn.Conv2d):
                     for p in m.parameters():
@@ -401,32 +437,39 @@ class Policy(nn.Module):
                     p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
                     start += size
         elif self.optimize == 'all_cnns':
-            for m in [self.conv[0], self.conv[3]]:
-                for p in m.parameters():
-                    size = np.prod(p.data.shape)
-                    p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
-                    start += size
+            for m in self.modules():
+                if isinstance(m, nn.Conv2d):
+                    for p in m.parameters():
+                        size = np.prod(p.data.shape)
+                        p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
+                        start += size
         elif self.optimize == 'cnns_and_last_linear':
-            for m in [self.conv[0], self.conv[3], self.mlp[3]]:
-                for p in m.parameters():
-                    size = np.prod(p.data.shape)
-                    p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
-                    start += size
-        elif self.optimize == 'all_linear':
-            for m in [self.mlp[0], self.mlp[3]]:
-                for p in m.parameters():
-                    size = np.prod(p.data.shape)
-                    p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
-                    start += size
-        elif self.optimize == 'last_layer':
-            for p in self.mlp[3].parameters():
+            for m in self.modules():
+                if isinstance(m, nn.Conv2d):
+                    for p in m.parameters():
+                        size = np.prod(p.data.shape)
+                        p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
+                        start += size
+            m = self.mlp[-1]
+            for p in m.parameters():
                 size = np.prod(p.data.shape)
                 p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
                 start += size
-
-    def set_ref_batch(self, ref_batch):
-        self.ref_list = []
-        self.ref_list.append(ref_batch)
+        elif self.optimize == 'all_linear':
+            for m in self.modules():
+                if isinstance(m, nn.Linear):
+                    for p in m.parameters():
+                        size = np.prod(p.data.shape)
+                        p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
+                        start += size
+        elif self.optimize == 'last_layer':
+            m = self.mlp[-1]
+            for p in m.parameters():
+                size = np.prod(p.data.shape)
+                p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
+                start += size
+        else:
+            print("{} is not an allowed policy optimization mode!".format(self.optimize))
 
     @property
     def num_parameters(self):
@@ -436,10 +479,6 @@ class Policy(nn.Module):
                 for p in m.parameters():
                     n += np.prod(p.data.size())
         return n
-
-    @property
-    def needs_ref_batch(self):
-        return True
 
 
 def get_env():
@@ -506,6 +545,49 @@ def test(ob=None, a=False):
         ob = to_obs_tensor(env.reset())
     print(act(ob))
     print(pol.forward(ob))
+
+
+
+
+def f(pol, mode):
+    if mode == 'all':
+        for m in pol.modules():
+            if not isinstance(m, Policy) and not isinstance(m, nn.Sequential):
+                print(m)
+    if mode == 'all_except_linear':
+        for m in pol.modules():
+            if not isinstance(m, Policy) and not isinstance(m, nn.Sequential) and not isinstance(m, nn.Linear):
+                print(m)
+    if mode == 'all_except_VBN':
+        for m in pol.modules():
+            if not isinstance(m, Policy) and not isinstance(m, nn.Sequential) and not isinstance(m, VirtualBatchNorm):
+                print(m)
+    if mode == 'all_except_cnns':
+        for m in pol.modules():
+            if not isinstance(m, Policy) and not isinstance(m, nn.Sequential) and not isinstance(m, nn.Conv2d):
+                print(m)
+    elif mode == 'all_except_first_linear':
+        for m in pol.conv:
+            print(m)
+        for m in pol.mlp[1:]:
+            print(m)
+    elif mode == 'all_cnns':
+        for m in pol.modules():
+            if isinstance(m, nn.Conv2d):
+                print(m)
+    elif mode == 'cnns_and_last_linear':
+        for m in pol.modules():
+            if isinstance(m, nn.Conv2d):
+                print(m)
+        m = pol.mlp[-1]
+        print(m)
+    elif mode == 'all_linear':
+        for m in pol.modules():
+            if isinstance(m, nn.Linear):
+                print(m)
+    elif mode == 'last_layer':
+        m = pol.mlp[-1]
+        print(m)
 
 
 """

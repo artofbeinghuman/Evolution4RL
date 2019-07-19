@@ -20,14 +20,14 @@ short_names = [s[:-len("NoFrameskip-v4")] for s in envs]
 @click.option('-c', '--classic_es', is_flag=True)
 @click.option('-sa', '--stochastic_activation', is_flag=True)
 @click.option('--gain', default=1.0)
-@click.option('-o', '--optimize', multiple=True)
+@click.option('-o', '--optimize', default=-1)
 @click.option('-m', '--mutate', default=1)
 @click.option('-nv', '--no_videos', is_flag=True)
-def es(game, render, config, generations, sigma, seed, random_noise_size, classic_es, stochastic_activation, gain, optimize, mutate, no_videos):
+@click.option('-b', '--big_net', is_flag=True)
+def es(game, render, config, generations, sigma, seed, random_noise_size, classic_es,
+       stochastic_activation, gain, optimize, mutate, no_videos, big_net):
     timestamp = datetime.datetime.now()
-    if optimize == ():
-        optimize = (0,)
-    optimize = [int(i) for i in optimize]
+    optimize = optimization_modes[optimize]
     if config == "default":
         config = "configurations/default_atari_config.json"
         with open(config, 'r') as f:
@@ -41,15 +41,18 @@ def es(game, render, config, generations, sigma, seed, random_noise_size, classi
             config = json.loads(f.read())
 
     path = "save/{}-{}_{}".format(config["env_short"], str(timestamp.date()), str(timestamp.time()))
-    txt = "Log {}\n\nWith parameters: \ngame={} ({}) \nconfig={} \ngenerations={} \nsigma={} \nseed={} \nrandom_noise_size={} \nclassic_es={} \nstochastic_activation={} \n(xavier) gain={} \noptimize={}\nmutate={} parameters\n".format(path, config['env_short'], config['env_id'], config, generations, sigma, seed, random_noise_size, classic_es, stochastic_activation, gain, optimization_modes[optimize[0]], "all" if mutate == 1 else "1/{} of".format(mutate))
+    txt = "Log {}\n\nWith parameters: \ngame={} ({}) \nconfig={} \ngenerations={} \nsigma={} \nseed={}\nrandom_noise_size={} \
+           \nclassic_es={} \nstochastic_activation={} \n(xavier) gain={} \noptimize={}\nmutate={} parameters\nbig_net={}\n\
+           ".format(path, config['env_short'], config['env_id'], config, generations, sigma, seed, random_noise_size, classic_es,
+                    stochastic_activation, gain, optimize, "all" if mutate == 1 else "1/{} of".format(mutate), big_net)
 
-    worker = ES(config, rand_num_table_size=random_noise_size, sigma=sigma, seed=seed, render=render, verbose=True, log_path=path, initial_text=txt, classic_es=classic_es, stochastic_activation=stochastic_activation, gain=gain, optimize=optimize, mutate=mutate, no_videos=no_videos)
+    worker = ES(config, rand_num_table_size=random_noise_size, sigma=sigma, seed=seed, render=render,
+                verbose=True, log_path=path, initial_text=txt, classic_es=classic_es,
+                stochastic_activation=stochastic_activation, gain=gain, optimize=optimize, mutate=mutate,
+                no_videos=no_videos, big_net=big_net)
     worker(generations)
     worker.save(path + '.es')
 
 
 if __name__ == '__main__':
     es()
-
-
-# mpievo 72 -g seaquest -gens 300 -rn 1000000000 --gain 1.0 -s 0.05 --seed 123
