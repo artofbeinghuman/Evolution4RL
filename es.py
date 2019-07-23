@@ -29,6 +29,32 @@ def save_video(obs, path):
         imageio.mimwrite(path, img_as_ubyte(np.array(obs)), fps=30)
 
 
+def behaviour_distance(x, y):
+
+    # bring both behaviours up to same length
+    n, m = len(x), len(y)
+    if n > m:
+        a = np.linalg.norm(y - x[:m])
+        b = np.linalg.norm(y[-1] - x[m:])
+    else:
+        a = np.linalg.norm(x - y[:n])
+        b = np.linalg.norm(x[-1] - y[n:])
+    return np.sqrt(a**2 + b**2)
+
+
+def compute_novelty_vs_archive(archive, behaviour, k):
+    distances = []
+    nov = behaviour.astype(np.float)
+    for point in archive:
+        distances.append(behaviour_distance(point.astype(np.float), nov))
+
+    # Pick k nearest neighbors
+    distances = np.array(distances)
+    top_k_indicies = (distances).argsort()[:k]
+    top_k = distances[top_k_indicies]
+    return top_k.mean()
+
+
 class ES:
     """
     Runs a basic distributed Evolutionary strategy using MPI. The centroid
@@ -130,15 +156,18 @@ class ES:
         self._running_best_reward = np.float32(np.finfo(np.float32).min)
         self.optimizer = {'sgd': SGD, 'adam': Adam}[exp['optimizer']['type']](self._old_theta, **exp['optimizer']['args'])
         log(self, "Optimizing {} out of {} network parameters ({:.2f}%).".format(int(self._theta.size), self.policy.num_parameters, 100 * int(self._theta.size) / self.policy.num_parameters))
-
         self._update_ratios = []
+
+        # novelty search
+        novelty = kwargs.get('novelty', False)
+        self._archive = []
+        self._rew_nov_tradeoff = 0.5
 
         # User input parameters
         self.objective = self.policy.rollout
         timestep_limit = exp['config']['timestep_limit']  # kwargs.get('timestep_limit', 10000)
         max_runs = exp['config']['max_runs_per_eval']  # kwargs.get('max_runs_per_eval', 5)
         render = kwargs.get('render', False) if self._rank == 0 else False
-        novelty = kwargs.get('novelty', False)
         self.obj_kwargs = {'env': self.env, 'timestep_limit': timestep_limit, 'max_runs': max_runs, 'rank': self._rank, 'render': render, 'novelty': novelty}
         self._sigma = np.float32(kwargs.get('sigma', 0.05))  # this is the noise_stdev parameter from Uber json-configs
         self._num_parameters = len(self._theta)
@@ -181,6 +210,8 @@ class ES:
         self._comm_local = self._comm.Split(color=all_ips.index(local_ip), key=self._rank)
 
         self._rand_num_table_size = kwargs.get("rand_num_table_size", 200000)  # 250000000 ~ 1GB of noise
+        self._max_table_step = kwargs.get("max_table_step", 5)
+        self._max_param_step = kwargs.get("max_param_step", 1)
         nbytes = self._rand_num_table_size * MPI.FLOAT.Get_size() if self._comm_local.rank == 0 else 0
         win = MPI.Win.Allocate_shared(nbytes, MPI.FLOAT.Get_size(), comm=self._comm_local)
         buf, itemsize = win.Shared_query(0)
@@ -194,8 +225,13 @@ class ES:
             # Fold step-size into noise
             self._rand_num_table *= self._sigma
 
-        self._max_table_step = kwargs.get("max_table_step", 5)
-        self._max_param_step = kwargs.get("max_param_step", 1)
+        archive_length = self._rand_num_table_size // 100
+        nbytes = archive_length * 128 * MPI.FLOAT.Get_size() if self._comm_local.rank == 0 else 0
+        win = MPI.Win.Allocate_shared(nbytes, MPI.FLOAT.Get_size(), comm=self._comm_local)
+        buf, itemsize = win.Shared_query(0)
+        assert itemsize == MPI.FLOAT.Get_size()
+        self._archive = np.ndarray(buffer=buf, dtype='f', shape=(archive_length, 128))
+        self._archive_idc = []
 
         self._comm.Barrier()
         if self._rank % 96 < 2:
@@ -212,6 +248,8 @@ class ES:
                  "_optimize": self._optimize,
                  "_noise_seed": self._noise_seed,
                  "_big_net": self._big_net,
+                 # "_archive": self._archive,
+                 "_rew_nov_tradeoff": self._rew_nov_tradeoff,
                  "_stochastic_activation": self._stochastic_activation,
                  "optimizer": self.optimizer,
                  "_OpenAIES": self._OpenAIES,
@@ -345,9 +383,6 @@ class ES:
         # Run objective
         local_rew = np.empty(1, dtype=np.float32)
         local_rew[0], roll_obs = objective(self._theta, curr_best=self._running_best_reward)
-        if self.obj_kwargs['novelty']:
-            novelty_vector = roll_obs[1]
-            roll_obs = roll_obs[0]
 
         # Consolidate return values
         all_rewards = np.empty(self._size, dtype=np.float32)
@@ -356,21 +391,78 @@ class ES:
                              [all_rewards, self._MPI.FLOAT])
         self._update_log(all_rewards)
 
-        # save video of new best run
+        # save video of new best run judged by reward
         if self._rank == np.argmax(all_rewards) and np.max(all_rewards) >= self._running_best_reward and self._video:
             path = '{}-gen{}-rank{}-rew{:.2f}.mp4'.format(self._path, self._generation_number, self._rank, local_rew[0])
             save_video(roll_obs, path)
             print('## saved running best video to {}'.format(path))
 
-        # update theta and log generation results
+        # treat behaviour/novelty:
+        if self.obj_kwargs['novelty']:
+            behaviour = roll_obs[1]
+            roll_obs = roll_obs[0]
+            # print("behaviour shape, worker {}".format(self._rank), behaviour.shape)
+            # put behaviour into archive with some probability (5/comm.size)
+            size = 5 if self._size >= 5 else self._size
+            if self._rank == 0:
+                # choose ranks from which to pull novelty vectors
+                ranks = np.random.RandomState(np.random.randint(10000)).choice(range(self._size), size=size, replace=False)
+            else:
+                ranks = np.empty(size, dtype=np.int)
+            self._comm.Bcast(ranks, root=0)
+            # print("ranks, worker {}".format(self._rank), ranks)
+
+            # add chosen policy behaviours to archive
+            for rank in ranks:
+                if self._rank == rank:
+                    setoff = 0 if self._archive_idc == [] else self._archive_idc[-1][1]
+                    # check if size of archive is depleted, in that case swap first entry
+                    if setoff + len(behaviour) > len(self._archive):
+                        print("====== write at archive beginning again")
+                        setoff = 0
+                        self._archive_idc.pop(0)
+
+                    bslice = [setoff, setoff + len(behaviour)]
+                    self._archive_idc.append(bslice)
+
+                    while True:
+                        if self._archive_idc[0][0] >= bslice[1] or self._archive_idc[0][0] == 0:
+                            break
+                        else:
+                            print("====== threw out {}, new idc {}".format(self._archive_idc[0], bslice))
+                            self._archive_idc.pop(0)
+                    self._archive[bslice[0]:bslice[1]] = behaviour
+                    # print("archive, worker {}".format(self._rank), self._archive[:5])
+
+                self._archive_idc = self._comm.bcast(self._archive_idc, root=rank)
+                # print("archive, worker {}".format(self._rank), self._archive_idc)
+
+            # print("archive, worker {}".format(self._rank), self._archive[:5], self._archive_idc)
+
+            # compute combined fitness
+            local_novelty = np.empty(1, dtype=np.float32)
+            local_novelty[0] = compute_novelty_vs_archive(self._archive, behaviour, size)
+            # print("local_novelty, worker {}".format(self._rank), local_novelty)
+            all_novelty = np.empty(self._size, dtype=np.float32)
+            self._comm.Allgather([local_novelty, self._MPI.FLOAT], [all_novelty, self._MPI.FLOAT])
+            # rank rewards and novelty before calculating fitness, to get the same scales (Uber ES-NS Paper, sec.3.2)
+            all_fitness = self._rew_nov_tradeoff * np.argsort(-all_rewards) + (1 - self._rew_nov_tradeoff) * np.argsort(-all_novelty)
+            # if self._rank == 0:
+            #     print("all_fitness, worker {}".format(self._rank), all_fitness)
+        else:
+            all_fitness = all_rewards
+            all_rewards = None
+
+        self._comm.Barrier()
+        # update theta according to fitness and log generation results
         if self._rank == 0:
-            self._update_theta(all_rewards, unmatched_dimension_slices, dimension_slices, perturbation_slices)
+            self._update_theta(all_fitness, unmatched_dimension_slices, dimension_slices, perturbation_slices, all_rewards)
             log(self, "Gen {} | Mean reward: {:.2f}, Best: {}, {:.2f} || Update ratio: {}".format(self._generation_number, np.sum(all_rewards) / self._size, np.argmax(all_rewards), np.max(all_rewards), self._update_ratios[-1]))
         else:
-            self._update_theta(all_rewards, unmatched_dimension_slices, dimension_slices, perturbation_slices)
+            self._update_theta(all_fitness, unmatched_dimension_slices, dimension_slices, perturbation_slices, all_rewards)
 
-    def _update_theta(self, all_rewards, master_dim_slices, local_dim_slices,
-                      local_perturbation_slices):
+    def _update_theta(self, all_fitness, master_dim_slices, local_dim_slices,
+                      local_perturbation_slices, all_rewards=None):
         """
         *Adds an additional multiply operation to avoid creating a new
         set of arrays for the slices. Not sure which would be faster
@@ -382,16 +474,24 @@ class ES:
         else:
             g = self._old_theta
 
-        for parent_num, rank in enumerate(np.argsort(all_rewards)[::-1]):
+        if all_rewards is None:
+            all_rewards = all_fitness
+
+        best_rank = np.argmax(all_rewards)
+        if all_rewards[best_rank] >= self._running_best_reward:
+            self._update_best_flag = True
+            self._running_best_reward = all_rewards[best_rank]
+            log(self, "## New running best: {:.2f} ##".format(self._running_best_reward))
+            self._running_best[:] = self._old_theta.copy()  # unperturbed theta
+
+        for parent_num, rank in enumerate(np.argsort(all_fitness)[::-1]):
             if parent_num < self._num_parents:
-                if parent_num == 0:
-                    assert all_rewards[rank] == np.max(all_rewards)
                 # Begin Update sequence for the running best if applicable
-                if parent_num == 0 and all_rewards[rank] >= self._running_best_reward:
-                    self._update_best_flag = True
-                    self._running_best_reward = all_rewards[rank]
-                    log(self, "## New running best: {:.2f} ##".format(self._running_best_reward))
-                    self._running_best[:] = self._old_theta.copy()  # unperturbed theta
+                # if parent_num == 0 and all_rewards[rank] >= self._running_best_reward:
+                #     self._update_best_flag = True
+                #     self._running_best_reward = all_rewards[rank]
+                #     log(self, "## New running best: {:.2f} ##".format(self._running_best_reward))
+                #     self._running_best[:] = self._old_theta.copy()  # unperturbed theta
 
                 if rank == self._rank:
                     dimension_slices = local_dim_slices
@@ -404,7 +504,8 @@ class ES:
                     #     print("grad rand numbers, worker {} on node {}:".format(self._rank, socket.gethostname()), self._rand_num_table[perturbation_slices[0]][:5])
 
                 # Apply update running best
-                if parent_num == 0 and self._update_best_flag:
+                # if parent_num == 0 and self._update_best_flag:
+                if rank == best_rank and self._update_best_flag:
                     multi_slice_add(self._running_best, self._rand_num_table,
                                     dimension_slices, perturbation_slices, rank % 2 == 0)
                     self._update_best_flag = False
@@ -418,7 +519,12 @@ class ES:
             else:
                 if rank != self._rank:
                     # advance the random draw for all other workers, such that they stay synchronised
-                    self._draw_random_table_slices(self._worker_rngs[rank])
+                    perturbation_slices = self._draw_random_table_slices(self._worker_rngs[rank])
+                    if rank == best_rank and self._update_best_flag:
+                        dimension_slices, perturbation_slices = match_slices(master_dim_slices, perturbation_slices)
+                        multi_slice_add(self._running_best, self._rand_num_table,
+                                        dimension_slices, perturbation_slices, rank % 2 == 0)
+                        self._update_best_flag = False
 
         # update step
         if self._OpenAIES:

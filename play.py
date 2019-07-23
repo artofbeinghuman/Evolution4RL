@@ -22,7 +22,7 @@ def play(game, random):
     i = short_names.index(game)
     env = gym.make(envs[i])
     print(env.get_action_meanings())
-    env = wrap_env(env, fire_reset=env.get_action_meanings()[1] == 'FIRE')
+    env = wrap_env(env)
     i = 0
     if random:
         for _ in range(1):

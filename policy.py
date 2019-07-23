@@ -263,7 +263,7 @@ class Policy(nn.Module):
         rewards = [np.sum(rews) for rews in rewards]
         mean_reward = np.mean(rewards)
         if novelty:
-            return mean_reward, (roll_obs, novelty_vector)
+            return mean_reward, (roll_obs, np.array(novelty_vector))
         else:
             return mean_reward, roll_obs
 
