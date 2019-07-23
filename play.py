@@ -18,19 +18,20 @@ short_names = [s[:-len("NoFrameskip-v4")] for s in envs]
 @click.option('-g', '--game', default="Breakout")
 @click.option('-r', '--random', is_flag=True)
 def play(game, random):
-    game = game.capitalize()
+    game = game[0].capitalize() + game[1:]
     i = short_names.index(game)
     env = gym.make(envs[i])
     print(env.get_action_meanings())
     env = wrap_env(env, fire_reset=env.get_action_meanings()[1] == 'FIRE')
     i = 0
     if random:
-        for _ in range(3):
+        for _ in range(1):
             _ = env.reset()
-            while True:
+            while i < 300:
                 # time.sleep(0.3)
                 _, rew, done, info = env.step(env.action_space.sample())  # env.action_space.sample())
                 env.render()
+                # print(env.unwrapped._get_ram())
                 i += 1
                 print(i, rew, done, info)
                 if rew > 0.0:

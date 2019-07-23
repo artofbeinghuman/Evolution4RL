@@ -138,7 +138,8 @@ class ES:
         timestep_limit = exp['config']['timestep_limit']  # kwargs.get('timestep_limit', 10000)
         max_runs = exp['config']['max_runs_per_eval']  # kwargs.get('max_runs_per_eval', 5)
         render = kwargs.get('render', False) if self._rank == 0 else False
-        self.obj_kwargs = {'env': self.env, 'timestep_limit': timestep_limit, 'max_runs': max_runs, 'rank': self._rank, 'render': render}
+        novelty = kwargs.get('novelty', False)
+        self.obj_kwargs = {'env': self.env, 'timestep_limit': timestep_limit, 'max_runs': max_runs, 'rank': self._rank, 'render': render, 'novelty': novelty}
         self._sigma = np.float32(kwargs.get('sigma', 0.05))  # this is the noise_stdev parameter from Uber json-configs
         self._num_parameters = len(self._theta)
         self._mutate = kwargs.get('mutate', 1)
@@ -288,8 +289,8 @@ class ES:
 
             # self.policy.set_from_flat(self._theta)
             # self._theta = self.policy.get_flat()  # such that new random slice of CNN is drawn
-
-            log(self, "Optimizing index {} of CNN parameters".format(self.policy.slices))
+            if self.policy.optimize == 'all':
+                log(self, "Optimizing index {} of CNN parameters".format(self.policy.slices))
             # if self._generation_number % 151 == 0 and self._generation_number > 0:
             #     self._weights *= np.array([self._sigma], dtype=np.float32)
             #     self._rand_num_table /= np.array([self._sigma], dtype=np.float32)
@@ -344,6 +345,9 @@ class ES:
         # Run objective
         local_rew = np.empty(1, dtype=np.float32)
         local_rew[0], roll_obs = objective(self._theta, curr_best=self._running_best_reward)
+        if self.obj_kwargs['novelty']:
+            novelty_vector = roll_obs[1]
+            roll_obs = roll_obs[0]
 
         # Consolidate return values
         all_rewards = np.empty(self._size, dtype=np.float32)

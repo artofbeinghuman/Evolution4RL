@@ -218,7 +218,7 @@ class Policy(nn.Module):
         else:
             return torch.argmax(x, dim=1)
 
-    def rollout(self, theta, env, timestep_limit, max_runs=5, rank=None, render=False, curr_best=None):
+    def rollout(self, theta, env, timestep_limit, max_runs=5, rank=None, novelty=False, render=False, curr_best=None):
         """
         rollout of the policy in the given env for no more than max_runs and no more than timestep_limit steps
         """
@@ -230,6 +230,7 @@ class Policy(nn.Module):
         rewards = []
 
         roll_obs = []
+        novelty_vector = []
 
         # do rollouts until max_runs rollouts where done or
         # until time left is less than 70% of mean rollout length
@@ -245,7 +246,8 @@ class Policy(nn.Module):
                 action = int(self.forward(to_obs_tensor(obs)))
                 obs, rew, done, _ = env.step(action)
                 rewards[-1].append(rew)
-
+                if novelty:
+                    novelty_vector.append(env.unwrapped._get_ram())
                 if curr_best:
                     roll_obs.append(obs)
                 if render:
@@ -260,7 +262,10 @@ class Policy(nn.Module):
 
         rewards = [np.sum(rews) for rews in rewards]
         mean_reward = np.mean(rewards)
-        return mean_reward, roll_obs
+        if novelty:
+            return mean_reward, (roll_obs, novelty_vector)
+        else:
+            return mean_reward, roll_obs
 
     def play(self, env, theta=None, loop=False, save=False):
         if theta is not None:
@@ -359,11 +364,12 @@ class Policy(nn.Module):
                     for p in m.parameters():
                         flat_parameters.append(p.data.view(-1))
             # only return 1/500 of the CNN parameters
-            # conv_parameters = []
-            # for m in self.modules():
-            #     if isinstance(m, nn.Conv2d):
-            #         for p in m.parameters():
-            #             conv_parameters.append(p.data.view(-1))
+            conv_parameters = []
+            for m in self.modules():
+                if isinstance(m, nn.Conv2d):
+                    for p in m.parameters():
+                        conv_parameters.append(p.data.view(-1))
+            flat_parameters.extend(conv_parameters)
             # conv_parameters = np.concatenate(conv_parameters)
             # # self.slices = random_slices(self.rng, len(conv_parameters), int(len(conv_parameters) / 500), 1)
             # # flat_parameters.append(conv_parameters[tuple(self.slices)])
@@ -443,12 +449,13 @@ class Policy(nn.Module):
             # conv_parameters[self.slices] = flat_parameters[start:start + size]
             # # set the now changed conv_parameters to the actual network weights (to make sure)
             # start = 0
-            # for m in self.modules():
-            #     if isinstance(m, nn.Conv2d):
-            #         for p in m.parameters():
-            #             size = np.prod(p.data.shape)
-            #             p.data = torch.tensor(conv_parameters[start:start + size]).view(p.data.shape)
-            #             start += size
+            for m in self.modules():
+                if isinstance(m, nn.Conv2d):
+                    for p in m.parameters():
+                        size = np.prod(p.data.shape)
+                        # p.data = torch.tensor(conv_parameters[start:start + size]).view(p.data.shape)
+                        p.data = torch.tensor(flat_parameters[start:start + size]).view(p.data.shape)
+                        start += size
 
         elif self.optimize == 'all_except_linear':
             for m in self.modules():
