@@ -170,7 +170,10 @@ class Policy(nn.Module):
 
             self.lin_dim = (conv3_out)**2 * 64
 
-            self.mlp = nn.Sequential(nn.Linear(in_features=self.lin_dim, out_features=512, bias=False),
+            self.mlp = nn.Sequential(nn.Linear(in_features=self.lin_dim, out_features=1024, bias=False),
+                                     VirtualBatchNorm(input_shape=[1024]),
+                                     nn.ReLU(),
+                                     nn.Linear(in_features=1024, out_features=512, bias=False),
                                      VirtualBatchNorm(input_shape=[512]),
                                      nn.ReLU(),
                                      nn.Linear(in_features=512, out_features=256, bias=False),

@@ -160,7 +160,7 @@ class ES:
         # novelty search
         novelty = kwargs.get('novelty', False)
         self._archive = []
-        self._rew_nov_tradeoff = 0.5
+        self._rew_nov_tradeoff = 1.0
 
         # User input parameters
         self.objective = self.policy.rollout
@@ -317,6 +317,7 @@ class ES:
         :param num_generations: how many generations it will run for
         :return: None
         """
+        recent_gens = 10
         t = time.time()
         tt = time.time()
         partial_objective = partial(self.objective, **self.obj_kwargs)
@@ -324,8 +325,25 @@ class ES:
             self._comm.Barrier()
             self._generation_number += 1
 
-            # self.policy.set_from_flat(self._theta)
-            # self._theta = self.policy.get_flat()  # such that new random slice of CNN is drawn
+            # adapt novelty reward tradeoff parameter each recent_gens generations
+            if self.obj_kwargs['novelty'] and len(self._score_history) >= recent_gens and self._generation_number % recent_gens == 1:
+                last_rewards = [np.mean(rews) for rews in self._score_history[-recent_gens:]]
+                # if stagnating, weigh novelty more, else reward
+                if np.max(last_rewards) - np.min(last_rewards) < 0.1 * np.mean(last_rewards):
+                    self._rew_nov_tradeoff -= 0.1
+                    if self._rew_nov_tradeoff < 0.0:
+                        self._rew_nov_tradeoff = 0.0
+                        log(self, "====== keep on optimizing for NOVELTY, {}".format(self._rew_nov_tradeoff))
+                    else:
+                        log(self, "====== weighing stronger towards NOVELTY, {}".format(self._rew_nov_tradeoff))
+                else:
+                    self._rew_nov_tradeoff += 0.1
+                    if self._rew_nov_tradeoff > 1.0:
+                        self._rew_nov_tradeoff = 1.0
+                        log(self, "====== keep on optimizing for REWARD, {}".format(self._rew_nov_tradeoff))
+                    else:
+                        log(self, "====== weighing stronger towards REWARD, {}".format(self._rew_nov_tradeoff))
+
             if self.policy.optimize == 'all':
                 log(self, "Optimizing index {} of CNN parameters".format(self.policy.slices))
             # if self._generation_number % 151 == 0 and self._generation_number > 0:
@@ -415,7 +433,7 @@ class ES:
 
                     # check if size of archive is depleted, in that case swap first entry
                     if setoff + len(behaviour) > len(self._archive):
-                        print("====== write at archive beginning again")
+                        # print("====== write at archive beginning again")
                         setoff = 0
                         self._archive_idc.pop(0)
 
@@ -426,7 +444,7 @@ class ES:
                         if self._archive_idc[0][0] >= bslice[1] or self._archive_idc[0][0] == 0:
                             break
                         else:
-                            print("====== threw out {}, new index {}".format(self._archive_idc[0], bslice))
+                            # print("====== threw out {}, new index {}".format(self._archive_idc[0], bslice))
                             self._archive_idc.pop(0)
                     self._archive[bslice[0]:bslice[1]] = behaviour
 
