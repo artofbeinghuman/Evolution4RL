@@ -132,14 +132,15 @@ Deepmind 2015 Architecture (+VirtualBatchNorm)
 
 """
 
-modes = ['last_layer', 'cnns_and_last_linear', 'all_except_first_linear', 'all_linear', 'all_except_linear', 'all_cnns', 'all_except_VBN', 'all_except_cnns', 'all']
+opt_modes = ['last_layer', 'cnns_and_last_linear', 'all_except_first_linear', 'all_linear', 'all_except_linear', 'all_cnns', 'all_except_VBN', 'all_except_cnns', 'all']
+act_modes = ['argmax', 'argmax_eps_greedy', 'argmax_stochastic', 'full_stochastic']
 
 
 class Policy(nn.Module):
     def __init__(self, input_shape, output_shape, ref_batch=None, big_net=False):
         super(Policy, self).__init__()
 
-        self.stochastic_activation = True
+        self.activation_mode = 'argmax'
         self.gain = 1.0
         self.optimize = 'last_layer'
         self.n_actions = output_shape
@@ -208,15 +209,28 @@ class Policy(nn.Module):
         return self.activation(x)
 
     def activation(self, x):
-        if self.stochastic_activation:
+        if self.activation_mode == 'full_stochastic':
+            x = nn.functional.softmax(x, dim=-1)
+            return torch.distributions.categorical.Categorical(probs=x).sample()
+
+        elif self.activation_mode == 'argmax_stochastic':
             if np.random.rand() < 0.1:
                 x = nn.functional.softmax(x, dim=-1)
                 return torch.distributions.categorical.Categorical(probs=x).sample()
             else:
                 return torch.argmax(x, dim=1)
-                # return np.random.randint(self.n_actions)
-        else:
+
+        elif self.activation_mode == 'argmax_eps_greedy':
+            if np.random.rand() < 0.1:
+                return np.random.randint(self.n_actions)
+            else:
+                return torch.argmax(x, dim=1)
+
+        elif self.activation_mode == 'argmax':
             return torch.argmax(x, dim=1)
+
+        else:
+            print("{} is not an allowed policy activation mode!".format(self.activation_mode))
 
     def rollout(self, theta, env, timestep_limit, max_runs=5, rank=None, novelty=False, render=False, curr_best=None):
         """
