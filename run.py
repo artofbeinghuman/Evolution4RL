@@ -22,11 +22,12 @@ short_names = [s[:-len("NoFrameskip-v4")] for s in envs]
 @click.option('--gain', default=1.0)
 @click.option('-o', '--optimize', default=-1)
 @click.option('-m', '--mutate', default=1)
+@click.option('-p', '--num_parents', default=1)
 @click.option('-nv', '--no_videos', is_flag=True)
 @click.option('-b', '--big_net', is_flag=True)
 @click.option('-n', '--novelty', is_flag=True)
 def es(game, render, config, generations, sigma, seed, random_noise_size, classic_es,
-       activation, gain, optimize, mutate, no_videos, big_net, novelty):
+       activation, gain, optimize, mutate, num_parents, no_videos, big_net, novelty):
     timestamp = datetime.datetime.now()
     optimize = opt_modes[optimize]
     activation = act_modes[activation]
@@ -45,14 +46,15 @@ def es(game, render, config, generations, sigma, seed, random_noise_size, classi
 
     path = "save/{}-{}_{}".format(config["env_short"], str(timestamp.date()), str(timestamp.time()))
     txt = "Log {}.log\n\nWith parameters: \ngame={} ({}) \nconfig={} \ngenerations={} \nsigma={} \nseed={}\nrandom_noise_size={} \
-           \nclassic_es={} \n(xavier) gain={} \nactivation={} \noptimize={}\nmutate={} parameters\nbig_net={}\nnovelty={}\n\
+           \nclassic_es={} \n(xavier) gain={} \nactivation={} \noptimize={}\nmutate={} parameters\nnum_parents={} workers\nbig_net={}\nnovelty={}\n\
            ".format(path, config['env_short'], config['env_id'], config, generations, sigma, seed, random_noise_size, classic_es,
-                    gain, activation, optimize, "all" if mutate == 1 else "1/{} of".format(mutate), big_net, novelty)
+                    gain, activation, optimize, "all" if mutate == 1 else "1/{} of".format(mutate),
+                    "all" if num_parents == 1 else "1/{} of".format(num_parents), big_net, novelty)
 
     worker = ES(config, rand_num_table_size=random_noise_size, sigma=sigma, seed=seed, render=render,
-                verbose=True, log_path=path, initial_text=txt, classic_es=classic_es,
-                activation=activation, gain=gain, optimize=optimize, mutate=mutate,
-                no_videos=no_videos, big_net=big_net, novelty=novelty)
+                verbose=True, log_path=path, initial_text=txt, classic_es=classic_es, gain=gain,
+                activation=activation, optimize=optimize, mutate=mutate, no_videos=no_videos,
+                big_net=big_net, novelty=novelty, num_parents=num_parents)
     worker(generations)
     worker.save(path + '.es')
 

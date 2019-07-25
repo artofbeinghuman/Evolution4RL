@@ -177,19 +177,20 @@ class ES:
 
         if self._OpenAIES:
             # use centered ranks [0.5, -0.5]
-            self._num_parents = kwargs.get('num_parents', self._size)
+            self._num_parents = int(self._size / kwargs.get('num_parents', 1))
             # self._num_parents = 1  # int(np.ceil(0.1 * self._size))
-            self._weights = np.arange(self._num_parents, 0, -1, dtype=np.float32)
+            self._weights = np.arange(self._size, 0, -1, dtype=np.float32)
             # self._weights = self._weights / np.sum(self._weights)
-            self._weights = self._weights / np.array([self._num_parents], dtype=np.float32)
+            self._weights = self._weights / np.array([self._size], dtype=np.float32)
             self._weights -= 0.5
-            self._weights[self._num_parents // 2] = 0.001  # to avoid divide by zero
+            self._weights[self._size // 2] = 0.001  # to avoid divide by zero
             # multiply 1/sigma factor directly at this point,
             self._weights /= np.array([self._sigma], dtype=np.float32)
+            self._weights = self._weights[:self._num_parents]
             self._weights.astype(np.float32, copy=False)
         else:
             # Classics ES:
-            self._num_parents = kwargs.get('num_parents', int(self._size / 2))  # truncated selection
+            self._num_parents = int(self._size / kwargs.get('num_parents', 2))  # truncated selection
             # self._num_parents = 1  # int(np.ceil(0.1 * self._size))
             self._weights = np.log(self._num_parents + 0.5) - np.log(
                 np.arange(1, self._num_parents + 1))
@@ -325,6 +326,7 @@ class ES:
         :return: None
         """
         recent_gens = 15
+        w = get_weight(recent_gens)
         t = time.time()
         tt = time.time()
         partial_objective = partial(self.objective, **self.obj_kwargs)
@@ -336,9 +338,7 @@ class ES:
             if self.obj_kwargs['novelty'] and len(self._score_history) >= recent_gens and self._generation_number % recent_gens == 1:
                 last_rewards = [np.mean(rews) for rews in self._score_history[-recent_gens:]]
                 # if reward is increasing, optimize for rewards, else novelty
-                w = ((np.arange(recent_gens) / recent_gens) - 0.45)**3
-                w /= np.sum(np.abs(w))
-                if np.sum(np.dot(w, last_rewards)) > 0.02 * np.mean(last_rewards):
+                if np.dot(w, last_rewards) > 0.1 * np.mean(last_rewards):
                     self._rew_nov_tradeoff += 0.1
                     if self._rew_nov_tradeoff > 1.0:
                         self._rew_nov_tradeoff = 1.0
@@ -628,3 +628,13 @@ class ES:
             torch.save(self, pickled_obj_file)
             pickled_obj_file.close()
             print("Saved to", filename)
+
+
+def get_weight(recent_gens):
+    # create symmetric weight
+    if recent_gens % 2 == 0:
+        w = list(range(-recent_gens // 2, 0)) + list(range(1, recent_gens // 2 + 1))
+    else:
+        w = list(range(-(recent_gens // 2), 0)) + [0] + list(range(1, recent_gens // 2 + 1))
+
+    return (np.array(w) / (recent_gens // 2))**3
