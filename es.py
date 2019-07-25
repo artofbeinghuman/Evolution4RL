@@ -428,16 +428,16 @@ class ES:
         # treat behaviour/novelty:
         if self.obj_kwargs['novelty']:
             # put behaviour into archive with some probability (5/comm.size)
-            size = 5 if self._size >= 5 else self._size
-            if self._rank == 0:
+            size = 5 if self._comm_local.size >= 5 else self._size
+            if self._comm_local.rank == 0:
                 # choose ranks from which to pull novelty vectors
-                ranks = np.random.RandomState(np.random.randint(10000)).choice(range(self._size), size=size, replace=False)
+                ranks = np.random.RandomState(np.random.randint(10000)).choice(range(self._comm_local.size), size=size, replace=False)
             else:
                 ranks = np.empty(size, dtype=np.int)
             self._comm_local.Bcast(ranks, root=0)
             # add chosen policy behaviours to archive
             for rank in ranks:
-                if self._rank == rank:
+                if self._comm_local.rank == rank:
                     setoff = 0 if self._archive_idc == [] else self._archive_idc[-1][1]
 
                     # check if size of archive is depleted, in that case swap first entry
