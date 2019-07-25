@@ -216,13 +216,20 @@ class ES:
         buf, itemsize = win.Shared_query(0)
         assert itemsize == MPI.FLOAT.Get_size()
         self._rand_num_table = np.ndarray(buffer=buf, dtype='f', shape=(self._rand_num_table_size,))
+
+        # calculate random table distributed across workers on local node
+        t = time.time()
+        step = int(np.ceil(self._rand_num_table_size / self._comm_local.size)) if self._comm_local.rank == self._comm_local.size - 1 else int(np.floor(self._rand_num_table_size / self._comm_local.size))
+        noise_rng = np.random.RandomState(self._noise_seed * (self._comm_local.rank + 1))
+        if self._comm_local.rank == self._comm_local.size - 1:
+            self._rand_num_table[-step:] = noise_rng.randn(step)
+        else:
+            self._rand_num_table[self._comm_local.rank * step:(self._comm_local.rank + 1) * step] = noise_rng.randn(step)
+        self._comm_local.Barrier()
         if self._comm_local.rank == 0:
-            t = time.time()
-            noise_rng = np.random.RandomState(self._noise_seed)
-            self._rand_num_table[:] = noise_rng.randn(self._rand_num_table_size)
-            log(self, "Calculated Random Table in {}s.".format(time.time() - t))
             # Fold step-size into noise
             self._rand_num_table *= self._sigma
+            log(self, "Calculated Random Table in {}s.".format(time.time() - t))
 
         archive_length = self._rand_num_table_size // 100
         nbytes = archive_length * 128 * MPI.FLOAT.Get_size() if self._comm_local.rank == 0 else 0
@@ -317,7 +324,7 @@ class ES:
         :param num_generations: how many generations it will run for
         :return: None
         """
-        recent_gens = 10
+        recent_gens = 15
         t = time.time()
         tt = time.time()
         partial_objective = partial(self.objective, **self.obj_kwargs)
@@ -328,21 +335,23 @@ class ES:
             # adapt novelty reward tradeoff parameter each recent_gens generations
             if self.obj_kwargs['novelty'] and len(self._score_history) >= recent_gens and self._generation_number % recent_gens == 1:
                 last_rewards = [np.mean(rews) for rews in self._score_history[-recent_gens:]]
-                # if stagnating, weigh novelty more, else reward
-                if np.max(last_rewards) - np.min(last_rewards) < 0.1 * np.mean(last_rewards):
-                    self._rew_nov_tradeoff -= 0.1
-                    if self._rew_nov_tradeoff < 0.0:
-                        self._rew_nov_tradeoff = 0.0
-                        log(self, "====== keep on optimizing for NOVELTY, {}".format(self._rew_nov_tradeoff))
-                    else:
-                        log(self, "====== weighing stronger towards NOVELTY, {}".format(self._rew_nov_tradeoff))
-                else:
+                # if reward is increasing, optimize for rewards, else novelty
+                w = ((np.arange(recent_gens) / recent_gens) - 0.45)**3
+                w /= np.sum(np.abs(w))
+                if np.sum(np.dot(w, last_rewards)) > 0.02 * np.mean(last_rewards):
                     self._rew_nov_tradeoff += 0.1
                     if self._rew_nov_tradeoff > 1.0:
                         self._rew_nov_tradeoff = 1.0
                         log(self, "====== keep on optimizing for REWARD, {}".format(self._rew_nov_tradeoff))
                     else:
                         log(self, "====== weighing stronger towards REWARD, {}".format(self._rew_nov_tradeoff))
+                else:
+                    self._rew_nov_tradeoff -= 0.1
+                    if self._rew_nov_tradeoff < 0.0:
+                        self._rew_nov_tradeoff = 0.0
+                        log(self, "====== keep on optimizing for NOVELTY, {}".format(self._rew_nov_tradeoff))
+                    else:
+                        log(self, "====== weighing stronger towards NOVELTY, {}".format(self._rew_nov_tradeoff))
 
             if self.policy.optimize == 'all':
                 log(self, "Optimizing index {} of CNN parameters".format(self.policy.slices))
