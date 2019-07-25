@@ -434,7 +434,7 @@ class ES:
                 ranks = np.random.RandomState(np.random.randint(10000)).choice(range(self._size), size=size, replace=False)
             else:
                 ranks = np.empty(size, dtype=np.int)
-            self._comm.Bcast(ranks, root=0)
+            self._comm_local.Bcast(ranks, root=0)
             # add chosen policy behaviours to archive
             for rank in ranks:
                 if self._rank == rank:
@@ -457,7 +457,7 @@ class ES:
                             self._archive_idc.pop(0)
                     self._archive[bslice[0]:bslice[1]] = behaviour
 
-                self._archive_idc = self._comm.bcast(self._archive_idc, root=rank)
+                self._archive_idc = self._comm_local.bcast(self._archive_idc, root=rank)
 
             # compute combined fitness
             local_novelty = np.empty(1, dtype=np.float32)
