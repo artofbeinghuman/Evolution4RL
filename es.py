@@ -303,13 +303,13 @@ class ES:
         # self.policy.set_from_flat(self._running_best)
         self.objective = self.policy.rollout
 
-        nbytes = self._rand_num_table_size * MPI.FLOAT.Get_size() if self._rank == 0 else 0
-        win = MPI.Win.Allocate_shared(nbytes, MPI.FLOAT.Get_size(), comm=self._comm)
-        buf, itemsize = win.Shared_query(0)
-        assert itemsize == MPI.FLOAT.Get_size()
-        self._rand_num_table = np.ndarray(buffer=buf, dtype='f', shape=(self._rand_num_table_size,))
         # won't load huge noise table on local laptop
         if False:
+            nbytes = self._rand_num_table_size * MPI.FLOAT.Get_size() if self._rank == 0 else 0
+            win = MPI.Win.Allocate_shared(nbytes, MPI.FLOAT.Get_size(), comm=self._comm)
+            buf, itemsize = win.Shared_query(0)
+            assert itemsize == MPI.FLOAT.Get_size()
+            self._rand_num_table = np.ndarray(buffer=buf, dtype='f', shape=(self._rand_num_table_size,))
             if self._rank == 0:
                 t = time.time()
                 noise_rng = np.random.RandomState(self._noise_seed)
@@ -325,7 +325,10 @@ class ES:
         :param num_generations: how many generations it will run for
         :return: None
         """
-        recent_gens = 15
+        if socket.gethostname() == "mlpad":
+            recent_gens = 3
+        else:
+            recent_gens = 15
         w = get_weight(recent_gens)
         t = time.time()
         tt = time.time()
@@ -335,35 +338,22 @@ class ES:
             self._generation_number += 1
 
             # adapt novelty reward tradeoff parameter each recent_gens generations
-            if self.obj_kwargs['novelty'] and len(self._score_history) >= recent_gens and self._generation_number % recent_gens == 1:
+            if len(self._score_history) >= recent_gens and self._generation_number % recent_gens == 1:
                 # last_rewards = [np.mean(rews) for rews in self._score_history[-recent_gens:]]
-                # last_rewards = [np.max(rews) for rews in self._score_history[-recent_gens:]]
-                last_rewards = [np.mean(np.argsort(rews)[::-1][:int(np.ceil(self._size * 0.1))]) for rews in self._score_history[-recent_gens:]]
-                # if reward is increasing, optimize for rewards, else novelty
+                last_rewards = [np.max(rews) for rews in self._score_history[-recent_gens:]]
+                # last_rewards = [np.mean(np.argsort(rews)[::-1][:int(np.ceil(self._size * 0.1))]) for rews in self._score_history[-recent_gens:]]
+                # if reward is increasing, optimize for rewards and decrease sigma, else for novelty and increase sigma
                 if np.dot(w, last_rewards) > 0.1 * np.mean(last_rewards):
-                    self._rew_nov_tradeoff += 0.1
-                    if self._rew_nov_tradeoff > 1.0:
-                        self._rew_nov_tradeoff = 1.0
-                        log(self, "====== keep on optimizing for REWARD, {}".format(self._rew_nov_tradeoff))
-                    else:
-                        log(self, "====== weighing stronger towards REWARD, {}".format(self._rew_nov_tradeoff))
+                    self._set_sigma(self._sigma / 2)
+                    self._set_rew_nov_tradeoff(self._rew_nov_tradeoff + 0.1)
                 else:
-                    self._rew_nov_tradeoff -= 0.1
-                    if self._rew_nov_tradeoff < 0.0:
-                        self._rew_nov_tradeoff = 0.0
-                        log(self, "====== keep on optimizing for NOVELTY, {}".format(self._rew_nov_tradeoff))
-                    else:
-                        log(self, "====== weighing stronger towards NOVELTY, {}".format(self._rew_nov_tradeoff))
+                    self._set_sigma(self._sigma * 2)
+                    self._set_rew_nov_tradeoff(self._rew_nov_tradeoff - 0.1)
 
             if self.policy.optimize == 'all':
                 log(self, "Optimizing index {} of CNN parameters".format(self.policy.slices))
-            # if self._generation_number % 151 == 0 and self._generation_number > 0:
-            #     self._weights *= np.array([self._sigma], dtype=np.float32)
-            #     self._rand_num_table /= np.array([self._sigma], dtype=np.float32)
-            #     self._sigma /= 5  # np.sqrt(10)
-            #     self._weights /= np.array([self._sigma], dtype=np.float32)
-            #     self._rand_num_table *= self._sigma
 
+            self._comm.Barrier()
             self._update(partial_objective)
             log(self, "Gen {} took {}s.".format(self._generation_number, time.time() - t))
             t = time.time()
@@ -553,6 +543,35 @@ class ES:
     def _update_log(self, all_rewards):
 
         self._score_history.append(all_rewards)
+
+    def _set_rew_nov_tradeoff(self, new_tradeoff):
+        if self.obj_kwargs['novelty']:
+            if new_tradeoff > 1.0:
+                self._rew_nov_tradeoff = 1.0
+                log(self, "====== keep on optimizing for REWARD, {:.1f}".format(self._rew_nov_tradeoff))
+            elif new_tradeoff < 0.0:
+                self._rew_nov_tradeoff = 0.0
+                log(self, "====== keep on optimizing for NOVELTY, {:.1f}".format(self._rew_nov_tradeoff))
+            else:
+                if self._rew_nov_tradeoff > new_tradeoff:
+                    log(self, "====== weighing stronger towards NOVELTY, {:.1f}".format(new_tradeoff))
+                else:
+                    log(self, "====== weighing stronger towards REWARD, {:.1f}".format(new_tradeoff))
+                self._rew_nov_tradeoff = new_tradeoff
+
+    def _set_sigma(self, new_sigma):
+        if new_sigma > 0.00001 and new_sigma < 1.0:
+            if self._sigma > new_sigma:
+                log(self, "++++++ lowering SIGMA to, {:.5f}".format(new_sigma))
+            else:
+                log(self, "++++++ increasing SIGMA to, {:.5f}".format(new_sigma))
+            self._weights *= np.array([self._sigma], dtype=np.float32)
+            if self._comm_local.rank == 0:
+                self._rand_num_table /= np.array([self._sigma], dtype=np.float32)
+            self._sigma = new_sigma  # np.sqrt(10)
+            self._weights /= np.array([self._sigma], dtype=np.float32)
+            if self._comm_local.rank == 0:
+                self._rand_num_table *= self._sigma
 
     @property
     def centroid(self):
