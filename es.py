@@ -467,7 +467,11 @@ class ES:
             all_novelty = np.empty(self._size, dtype=np.float32)
             self._comm.Allgather([local_novelty, self._MPI.FLOAT], [all_novelty, self._MPI.FLOAT])
             # rank rewards and novelty before calculating fitness, to get the same scales (Uber ES-NS Paper, sec.3.2)
-            all_fitness = self._rew_nov_tradeoff * np.argsort(-all_rewards) + (1 - self._rew_nov_tradeoff) * np.argsort(-all_novelty)
+            rew_ranks = np.empty_like(all_rewards)
+            rew_ranks[np.argsort(all_rewards)] = np.arange(len(all_rewards))
+            nov_ranks = np.empty_like(all_novelty)
+            nov_ranks[np.argsort(all_novelty)] = np.arange(len(all_novelty))
+            all_fitness = self._rew_nov_tradeoff * rew_ranks + (1 - self._rew_nov_tradeoff) * nov_ranks
 
         else:
             all_fitness = all_rewards
