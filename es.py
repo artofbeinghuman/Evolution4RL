@@ -560,18 +560,22 @@ class ES:
                 self._rew_nov_tradeoff = new_tradeoff
 
     def _set_sigma(self, new_sigma):
-        if new_sigma > 0.00001 and new_sigma < 1.0:
-            if self._sigma > new_sigma:
-                log(self, "++++++ lowering SIGMA to, {:.5f}".format(new_sigma))
-            else:
-                log(self, "++++++ increasing SIGMA to, {:.5f}".format(new_sigma))
-            self._weights *= np.array([self._sigma], dtype=np.float32)
-            if self._comm_local.rank == 0:
-                self._rand_num_table /= np.array([self._sigma], dtype=np.float32)
-            self._sigma = new_sigma  # np.sqrt(10)
-            self._weights /= np.array([self._sigma], dtype=np.float32)
-            if self._comm_local.rank == 0:
-                self._rand_num_table *= self._sigma
+        if new_sigma < 0.00001:
+            new_sigma = 0.00001
+        elif new_sigma > 1.0:
+            new_sigma = 1.0
+        if self._sigma > new_sigma:
+            log(self, "++++++ lowering SIGMA to, {:.5f}".format(new_sigma))
+        else:
+            log(self, "++++++ increasing SIGMA to, {:.5f}".format(new_sigma))
+        self._weights *= np.array([self._sigma], dtype=np.float32)
+
+        if self._comm_local.rank == 0:
+            self._rand_num_table /= np.array([self._sigma], dtype=np.float32)
+        self._sigma = new_sigma  # np.sqrt(10)
+        self._weights /= np.array([self._sigma], dtype=np.float32)
+        if self._comm_local.rank == 0:
+            self._rand_num_table *= self._sigma
 
     @property
     def centroid(self):
