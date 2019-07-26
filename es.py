@@ -336,7 +336,9 @@ class ES:
 
             # adapt novelty reward tradeoff parameter each recent_gens generations
             if self.obj_kwargs['novelty'] and len(self._score_history) >= recent_gens and self._generation_number % recent_gens == 1:
-                last_rewards = [np.mean(rews) for rews in self._score_history[-recent_gens:]]
+                # last_rewards = [np.mean(rews) for rews in self._score_history[-recent_gens:]]
+                # last_rewards = [np.max(rews) for rews in self._score_history[-recent_gens:]]
+                last_rewards = [np.mean(np.argsort(rews)[::-1][:int(np.ceil(self._size * 0.1))]) for rews in self._score_history[-recent_gens:]]
                 # if reward is increasing, optimize for rewards, else novelty
                 if np.dot(w, last_rewards) > 0.1 * np.mean(last_rewards):
                     self._rew_nov_tradeoff += 0.1
